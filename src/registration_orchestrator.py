@@ -1,0 +1,552 @@
+"""
+Главный оркестратор процесса регистрации
+Координирует работу всех агентов системы
+"""
+
+import asyncio
+import logging
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
+from datetime import datetime
+import json
+
+from .temp_mail_agent import TempMailAgent
+from .email_verification_agent import EmailVerificationAgent
+from .intelligent_agent import IntelligentRegistrationAgent
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class RegistrationStep:
+    """Шаг процесса регистрации"""
+    step_id: str
+    step_name: str
+    status: str  # pending, in_progress, completed, failed
+    result: Dict[str, Any] = None
+    error: str = None
+    started_at: datetime = None
+    completed_at: datetime = None
+
+@dataclass
+class RegistrationResult:
+    """Результат процесса регистрации"""
+    success: bool
+    account_created: bool
+    email_verified: bool
+    credentials: Dict[str, str]
+    steps: List[RegistrationStep]
+    errors: List[str]
+    screenshots: List[str]
+    final_url: str = None
+    registration_data: Dict[str, Any] = None
+
+class RegistrationOrchestrator:
+    """
+    Главный координатор системы регистрации
+    Управляет всеми агентами и процессом регистрации
+    """
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        self.config = config or self._get_default_config()
+        self.temp_mail_agent = None
+        self.email_verification_agent = None
+        self.intelligent_agent = None
+        
+        self.current_registration = None
+        self.steps = []
+        
+        # Настройка логирования
+        logging.basicConfig(level=logging.INFO)
+        
+    def _get_default_config(self) -> Dict[str, Any]:
+        """Возвращает конфигурацию по умолчанию"""
+        return {
+            "max_retries": 3,
+            "page_load_timeout": 30000,
+            "element_timeout": 5000,
+            "email_check_interval": 10,
+            "email_wait_timeout": 300,
+            "screenshot_on_error": True,
+            "headless_mode": False,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "viewport": {"width": 1920, "height": 1080}
+        }
+    
+    async def start_registration(self, 
+                               registration_url: str,
+                               user_data: Dict[str, Any] = None) -> RegistrationResult:
+        """
+        Запускает процесс регистрации
+        
+        Args:
+            registration_url: URL страницы регистрации
+            user_data: Данные пользователя (опционально)
+            
+        Returns:
+            RegistrationResult: Результат регистрации
+        """
+        logger.info(f"Начало процесса регистрации на: {registration_url}")
+        
+        # Инициализация
+        self.steps = []
+        self.current_registration = {
+            'url': registration_url,
+            'user_data': user_data or {},
+            'started_at': datetime.now()
+        }
+        
+        try:
+            # Инициализируем агентов
+            await self._initialize_agents()
+            
+            # Создаем временный email
+            email_step = await self._create_temp_email()
+            
+            # Переходим на страницу регистрации и анализируем
+            navigation_step = await self._navigate_and_analyze(registration_url)
+            
+            # Заполняем форму регистрации
+            form_step = await self._fill_registration_form(email_step.result.get('email'))
+            
+            # Обрабатываем email верификацию (если требуется)
+            verification_step = await self._handle_email_verification()
+            
+            # Анализируем финальный результат
+            final_step = await self._analyze_final_result()
+            
+            # Формируем итоговый результат
+            return self._create_final_result()
+            
+        except Exception as e:
+            logger.error(f"Критическая ошибка в процессе регистрации: {e}")
+            error_step = RegistrationStep(
+                step_id="error",
+                step_name="Критическая ошибка",
+                status="failed",
+                error=str(e),
+                started_at=datetime.now(),
+                completed_at=datetime.now()
+            )
+            self.steps.append(error_step)
+            return self._create_final_result()
+        
+        finally:
+            await self._cleanup_agents()
+    
+    async def _initialize_agents(self):
+        """Инициализирует всех агентов"""
+        step = RegistrationStep(
+            step_id="init",
+            step_name="Инициализация агентов",
+            status="in_progress",
+            started_at=datetime.now()
+        )
+        self.steps.append(step)
+        
+        try:
+            # Инициализируем TempMailAgent
+            self.temp_mail_agent = TempMailAgent()
+            await self.temp_mail_agent.__aenter__()
+            
+            # Инициализируем EmailVerificationAgent
+            self.email_verification_agent = EmailVerificationAgent(
+                headless=self.config.get('headless_mode', False)
+            )
+            await self.email_verification_agent.__aenter__()
+            
+            # Инициализируем IntelligentRegistrationAgent
+            import os
+            from dotenv import load_dotenv
+            load_dotenv()
+            
+            api_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
+            if not api_key:
+                raise ValueError("Google API ключ не найден в переменных окружения")
+                
+            self.intelligent_agent = IntelligentRegistrationAgent(api_key)
+            
+            step.status = "completed"
+            step.completed_at = datetime.now()
+            step.result = {"agents_initialized": True}
+            
+            logger.info("Все агенты успешно инициализированы")
+            
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            step.completed_at = datetime.now()
+            raise
+    
+    async def _create_temp_email(self) -> RegistrationStep:
+        """Создает временный email адрес"""
+        step = RegistrationStep(
+            step_id="temp_email",
+            step_name="Создание временного email",
+            status="in_progress",
+            started_at=datetime.now()
+        )
+        self.steps.append(step)
+        
+        try:
+            temp_email = await self.temp_mail_agent.create_temp_email()
+            
+            step.status = "completed"
+            step.completed_at = datetime.now()
+            step.result = {
+                "email": temp_email.email,
+                "token": temp_email.token,
+                "expires_at": temp_email.expires_at.isoformat()
+            }
+            
+            # Сохраняем email в данные регистрации
+            self.current_registration['email'] = temp_email.email
+            
+            logger.info(f"Создан временный email: {temp_email.email}")
+            return step
+            
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            step.completed_at = datetime.now()
+            logger.error(f"Ошибка создания временного email: {e}")
+            raise
+    
+    async def _navigate_and_analyze(self, url: str) -> RegistrationStep:
+        """Переходит на страницу и анализирует её"""
+        step = RegistrationStep(
+            step_id="navigation",
+            step_name="Навигация и анализ страницы",
+            status="in_progress",
+            started_at=datetime.now()
+        )
+        self.steps.append(step)
+        
+        try:
+            # Используем intelligent_agent для навигации и анализа
+            analysis_result = await self.intelligent_agent.execute(url)
+            
+            # Преобразуем результат в ожидаемый формат
+            formatted_result = {
+                "page_type": "registration_page" if analysis_result else "unknown",
+                "success": analysis_result,
+                "forms_found": analysis_result,
+                "url": url,
+                "analysis_complete": True
+            }
+            
+            step.status = "completed" if analysis_result else "failed"
+            step.completed_at = datetime.now()
+            step.result = formatted_result
+            
+            logger.info(f"Страница проанализирована: {formatted_result.get('page_type', 'unknown')}")
+            return step
+            
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            step.completed_at = datetime.now()
+            logger.error(f"Ошибка навигации и анализа: {e}")
+            raise
+    
+    async def _fill_registration_form(self, email: str) -> RegistrationStep:
+        """Заполняет форму регистрации"""
+        step = RegistrationStep(
+            step_id="form_filling",
+            step_name="Заполнение формы регистрации",
+            status="in_progress",
+            started_at=datetime.now()
+        )
+        self.steps.append(step)
+        
+        try:
+            # Подготавливаем данные для формы
+            form_data = self._prepare_form_data(email)
+            
+            # Используем intelligent_agent для заполнения формы
+            fill_result = await self.intelligent_agent.fill_registration_form(form_data)
+            
+            step.status = "completed" if fill_result.get('success') else "failed"
+            step.completed_at = datetime.now()
+            step.result = fill_result
+            
+            # Сохраняем данные регистрации
+            self.current_registration['form_data'] = form_data
+            self.current_registration['form_result'] = fill_result
+            
+            logger.info("Форма регистрации заполнена")
+            return step
+            
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            step.completed_at = datetime.now()
+            logger.error(f"Ошибка заполнения формы: {e}")
+            raise
+    
+    async def _handle_email_verification(self) -> RegistrationStep:
+        """Обрабатывает email верификацию"""
+        step = RegistrationStep(
+            step_id="email_verification",
+            step_name="Email верификация",
+            status="in_progress",
+            started_at=datetime.now()
+        )
+        self.steps.append(step)
+        
+        try:
+            email = self.current_registration.get('email')
+            
+            # Ждем письмо с подтверждением
+            logger.info("Ожидание письма с подтверждением...")
+            link, code = await self.temp_mail_agent.get_verification_data(
+                timeout=self.config.get('email_wait_timeout', 300),
+                email=email
+            )
+            
+            if not link and not code:
+                # Проверяем, возможно верификация не требуется
+                step.status = "completed"
+                step.completed_at = datetime.now()
+                step.result = {
+                    "verification_required": False,
+                    "message": "Email верификация не требуется"
+                }
+                logger.info("Email верификация не требуется")
+                return step
+            
+            # Обрабатываем верификацию
+            verification_result = await self.email_verification_agent.handle_email_verification_flow(
+                verification_link=link,
+                verification_code=code
+            )
+            
+            step.status = "completed" if verification_result.get('success') else "failed"
+            step.completed_at = datetime.now()
+            step.result = verification_result
+            
+            if verification_result.get('success'):
+                logger.info("Email успешно подтвержден")
+            else:
+                logger.warning("Ошибка подтверждения email")
+            
+            return step
+            
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            step.completed_at = datetime.now()
+            logger.error(f"Ошибка email верификации: {e}")
+            return step
+    
+    async def _analyze_final_result(self) -> RegistrationStep:
+        """Анализирует финальный результат регистрации"""
+        step = RegistrationStep(
+            step_id="final_analysis",
+            step_name="Анализ финального результата",
+            status="in_progress",
+            started_at=datetime.now()
+        )
+        self.steps.append(step)
+        
+        try:
+            # Анализируем текущее состояние через intelligent_agent
+            final_analysis = await self.intelligent_agent.analyze_registration_completion()
+            
+            step.status = "completed"
+            step.completed_at = datetime.now()
+            step.result = final_analysis
+            
+            logger.info(f"Финальный анализ завершен: {final_analysis.get('registration_successful', False)}")
+            return step
+            
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            step.completed_at = datetime.now()
+            logger.error(f"Ошибка финального анализа: {e}")
+            return step
+    
+    def _prepare_form_data(self, email: str) -> Dict[str, Any]:
+        """Подготавливает данные для заполнения формы"""
+        # Базовые данные
+        form_data = {
+            'email': email,
+            'password': self._generate_password(),
+            'confirm_password': None,  # Будет установлен как password
+            'username': self._generate_username(email),
+            'first_name': 'Test',
+            'last_name': 'User',
+            'country': 'Russia',
+            'phone': '+7900123456',
+            'agree_terms': True,
+            'subscribe_newsletter': False
+        }
+        
+        # Добавляем пользовательские данные если есть
+        if self.current_registration.get('user_data'):
+            form_data.update(self.current_registration['user_data'])
+        
+        # Устанавливаем подтверждение пароля
+        form_data['confirm_password'] = form_data['password']
+        
+        return form_data
+    
+    def _generate_password(self) -> str:
+        """Генерирует безопасный пароль"""
+        import random
+        import string
+        
+        # Генерируем пароль с различными типами символов
+        length = 12
+        chars = string.ascii_letters + string.digits + "!@#$%^&*"
+        password = ''.join(random.choice(chars) for _ in range(length))
+        
+        # Убеждаемся что есть хотя бы одна цифра и спецсимвол
+        if not any(c.isdigit() for c in password):
+            password = password[:-1] + '1'
+        if not any(c in "!@#$%^&*" for c in password):
+            password = password[:-1] + '!'
+            
+        return password
+    
+    def _generate_username(self, email: str) -> str:
+        """Генерирует username на основе email"""
+        base = email.split('@')[0]
+        import random
+        suffix = random.randint(100, 999)
+        return f"{base}{suffix}"
+    
+    def _create_final_result(self) -> RegistrationResult:
+        """Создает финальный результат регистрации"""
+        completed_steps = [s for s in self.steps if s.status == "completed"]
+        failed_steps = [s for s in self.steps if s.status == "failed"]
+        
+        # Определяем успешность регистрации
+        account_created = any(
+            step.step_id == "form_filling" and step.status == "completed"
+            for step in self.steps
+        )
+        
+        email_verified = any(
+            step.step_id == "email_verification" and step.status == "completed" and
+            step.result.get('verification_required', True) and step.result.get('success', False)
+            for step in self.steps
+        )
+        
+        # Если верификация не требовалась, считаем её пройденной
+        if not email_verified:
+            email_verified = any(
+                step.step_id == "email_verification" and step.status == "completed" and
+                not step.result.get('verification_required', True)
+                for step in self.steps
+            )
+        
+        success = account_created and len(failed_steps) == 0
+        
+        # Собираем учетные данные
+        credentials = {}
+        if self.current_registration:
+            credentials = {
+                'email': self.current_registration.get('email'),
+                'password': self.current_registration.get('form_data', {}).get('password'),
+                'username': self.current_registration.get('form_data', {}).get('username')
+            }
+        
+        # Собираем ошибки
+        errors = [step.error for step in failed_steps if step.error]
+        
+        # Собираем скриншоты
+        screenshots = []
+        for step in self.steps:
+            if step.result and step.result.get('screenshot'):
+                screenshots.append(step.result['screenshot'])
+        
+        return RegistrationResult(
+            success=success,
+            account_created=account_created,
+            email_verified=email_verified,
+            credentials=credentials,
+            steps=self.steps,
+            errors=errors,
+            screenshots=screenshots,
+            final_url=self.intelligent_agent.get_current_url() if self.intelligent_agent else None,
+            registration_data=self.current_registration
+        )
+    
+    async def _cleanup_agents(self):
+        """Очищает ресурсы агентов"""
+        try:
+            if self.temp_mail_agent:
+                await self.temp_mail_agent.__aexit__(None, None, None)
+            
+            if self.email_verification_agent:
+                await self.email_verification_agent.__aexit__(None, None, None)
+                
+        except Exception as e:
+            logger.warning(f"Ошибка при очистке агентов: {e}")
+    
+    def save_registration_log(self, filepath: str = None):
+        """Сохраняет лог регистрации в файл"""
+        if not filepath:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = f"registration_log_{timestamp}.json"
+        
+        log_data = {
+            'registration_info': {
+                'url': self.current_registration.get('url'),
+                'email': self.current_registration.get('email'),
+                'started_at': self.current_registration.get('started_at').isoformat() if self.current_registration.get('started_at') else None,
+                'user_data': self.current_registration.get('user_data'),
+                'form_data': {k: v for k, v in self.current_registration.get('form_data', {}).items() if k != 'password'}  # Исключаем пароль
+            },
+            'steps': [
+                {
+                    'step_id': step.step_id,
+                    'step_name': step.step_name,
+                    'status': step.status,
+                    'result': step.result,
+                    'error': step.error,
+                    'started_at': step.started_at.isoformat() if step.started_at else None,
+                    'completed_at': step.completed_at.isoformat() if step.completed_at else None
+                }
+                for step in self.steps
+            ]
+        }
+        
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(log_data, f, ensure_ascii=False, indent=2)
+            logger.info(f"Лог регистрации сохранен: {filepath}")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения лога: {e}")
+
+
+# Пример использования
+async def main():
+    """Демонстрация работы RegistrationOrchestrator"""
+    orchestrator = RegistrationOrchestrator()
+    
+    # Пример регистрации
+    registration_url = "https://example.com/register"
+    user_data = {
+        'first_name': 'Иван',
+        'last_name': 'Петров',
+        'country': 'Russia'
+    }
+    
+    result = await orchestrator.start_registration(
+        registration_url=registration_url,
+        user_data=user_data
+    )
+    
+    print(f"Регистрация успешна: {result.success}")
+    print(f"Аккаунт создан: {result.account_created}")
+    print(f"Email подтвержден: {result.email_verified}")
+    print(f"Учетные данные: {result.credentials}")
+    
+    # Сохраняем лог
+    orchestrator.save_registration_log()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

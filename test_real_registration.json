@@ -1,0 +1,58 @@
+{
+  "registration_info": {
+    "url": "https://httpbin.org/forms/post",
+    "email": "ywk8m4q4h5@temp-mail.io",
+    "started_at": "2025-08-28T03:34:54.347463",
+    "user_data": {
+      "first_name": "Тест",
+      "last_name": "Пользователь",
+      "country": "Russia",
+      "phone": "+7900123456"
+    },
+    "form_data": {}
+  },
+  "steps": [
+    {
+      "step_id": "init",
+      "step_name": "Инициализация агентов",
+      "status": "completed",
+      "result": {
+        "agents_initialized": true
+      },
+      "error": null,
+      "started_at": "2025-08-28T03:34:54.347463",
+      "completed_at": "2025-08-28T03:34:54.772818"
+    },
+    {
+      "step_id": "temp_email",
+      "step_name": "Создание временного email",
+      "status": "completed",
+      "result": {
+        "email": "ywk8m4q4h5@temp-mail.io",
+        "token": "fallback",
+        "expires_at": "2025-08-28T04:34:55.089437"
+      },
+      "error": null,
+      "started_at": "2025-08-28T03:34:54.772818",
+      "completed_at": "2025-08-28T03:34:55.089437"
+    },
+    {
+      "step_id": "navigation",
+      "step_name": "Навигация и анализ страницы",
+      "status": "failed",
+      "result": null,
+      "error": "Browser.close: Connection closed while reading from the driver",
+      "started_at": "2025-08-28T03:34:55.089437",
+      "completed_at": "2025-08-28T03:36:42.344984"
+    },
+    {
+      "step_id": "error",
+      "step_name": "Критическая ошибка",
+      "status": "failed",
+      "result": null,
+      "error": "Browser.close: Connection closed while reading from the driver",
+      "started_at": "2025-08-28T03:36:42.344984",
+      "completed_at": "2025-08-28T03:36:42.344984"
+    }
+  ]
+}
