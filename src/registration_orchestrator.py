@@ -50,7 +50,10 @@ class RegistrationOrchestrator:
         self.config = config or self._get_default_config()
         self.temp_mail_agent = None
         self.email_verification_agent = None
-        # Убираем intelligent_agent - orchestrator создаст свой own intelligent logic
+        # Добавляем единственный браузер для всех агентов
+        self.shared_browser = None
+        self.shared_context = None
+        self.shared_page = None
         
         self.current_registration = None
         self.steps = []
@@ -131,6 +134,43 @@ class RegistrationOrchestrator:
         finally:
             await self._cleanup_agents()
     
+    async def _create_shared_browser(self):
+        """Создает единственный браузер для всех агентов"""
+        from playwright.async_api import async_playwright
+        
+        logger.info("Создание общего браузера для всех агентов...")
+        
+        self.playwright = await async_playwright().start()
+        
+        # Создаем браузер с стелс настройками
+        self.shared_browser = await self.playwright.chromium.launch(
+            headless=self.config.get('headless_mode', False),
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--disable-gpu',
+                '--disable-blink-features=AutomationControlled'
+            ]
+        )
+        
+        # Создаем контекст с реальными настройками
+        self.shared_context = await self.shared_browser.new_context(
+            viewport={'width': self.config.get('viewport', {}).get('width', 1920), 
+                     'height': self.config.get('viewport', {}).get('height', 1080)},
+            user_agent=self.config.get('user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
+            locale='en-US',
+            timezone_id='America/New_York'
+        )
+        
+        # Создаем страницу
+        self.shared_page = await self.shared_context.new_page()
+        
+        logger.info("Общий браузер создан успешно")
+    
     async def _initialize_agents(self):
         """Инициализирует всех агентов"""
         step = RegistrationStep(
@@ -142,24 +182,26 @@ class RegistrationOrchestrator:
         self.steps.append(step)
         
         try:
-            # Инициализируем TempMailAgent
+            # 1. Сначала создаем единственный браузер для всех агентов
+            await self._create_shared_browser()
+            
+            # 2. Инициализируем TempMailAgent
             self.temp_mail_agent = TempMailAgent()
             await self.temp_mail_agent.__aenter__()
             
-            # Инициализируем EmailVerificationAgent
+            # 3. Инициализируем EmailVerificationAgent с общим браузером
             self.email_verification_agent = EmailVerificationAgent(
                 headless=self.config.get('headless_mode', False)
             )
-            await self.email_verification_agent.__aenter__()
-            
-            # IntelligentAgent передается извне, не создаем здесь!
-            # Убираем дублирование - используем переданный экземпляр
+            # Передаем ему наш общий браузер
+            self.email_verification_agent.browser = self.shared_browser
+            self.email_verification_agent.context = self.shared_context
             
             step.status = "completed"
             step.completed_at = datetime.now()
-            step.result = {"agents_initialized": True}
+            step.result = {"agents_initialized": True, "shared_browser_created": True}
             
-            logger.info("Все агенты успешно инициализированы")
+            logger.info("Все агенты успешно инициализированы с общим браузером")
             
         except Exception as e:
             step.status = "failed"
@@ -180,7 +222,6 @@ class RegistrationOrchestrator:
         try:
             import random
             import string
-            from datetime import datetime
             
             # Генерируем уникальные данные
             timestamp = int(datetime.now().timestamp())
@@ -275,7 +316,6 @@ class RegistrationOrchestrator:
         
         try:
             from .intelligent_agent import IntelligentRegistrationAgent
-            from playwright.async_api import async_playwright
             
             # Получаем API ключ из config
             api_key = self.config.get('gemini_api_key')
@@ -286,25 +326,32 @@ class RegistrationOrchestrator:
             intelligent_agent = IntelligentRegistrationAgent(api_key)
             
             # Устанавливаем данные пользователя в agent
-            if hasattr(intelligent_agent, 'context'):
-                intelligent_agent.context.update(self.current_registration.get('user_data', {}))
-                intelligent_agent.context['email'] = self.current_registration.get('email', '')
+            if hasattr(intelligent_agent, 'user_data'):
+                intelligent_agent.user_data.update(self.current_registration.get('user_data', {}))
+                intelligent_agent.user_data['email'] = self.current_registration.get('email', '')
             
-            # Выполняем регистрацию через агента с ПОЛНОЙ мощностью
-            result = await intelligent_agent.execute(url)
+            # Переходим на страницу используя общий браузер
+            logger.info(f"Переход на страницу регистрации: {url}")
+            await self.shared_page.goto(url, wait_until='networkidle')
+            
+            # Выполняем РЕАЛЬНУЮ регистрацию через общий браузер
+            result = await intelligent_agent._intelligent_registration_flow(self.shared_page)
             
             # Обрабатываем результат
-            step.status = "completed" if result else "failed"
+            step.status = "completed" if result.get('success') else "failed"
             step.completed_at = datetime.now()
             step.result = {
-                "registration_completed": result,
-                "account_created": result,
+                "registration_completed": result.get('success'),
+                "account_created": result.get('success'),
                 "url": url,
                 "analysis_complete": True,
-                "email_verification_required": False  # Определим позже
+                "email_verification_required": False,
+                "shared_browser_used": True,
+                "steps_taken": result.get('steps_taken', 0),
+                "completion_reason": result.get('completion_reason', 'registration_flow')
             }
             
-            logger.info(f"Интеллектуальная регистрация завершена: {result}")
+            logger.info(f"Интеллектуальная регистрация завершена: {result.get('success')}")
             return step
             
         except Exception as e:
@@ -328,8 +375,13 @@ class RegistrationOrchestrator:
             # Подготавливаем данные для формы
             form_data = self._prepare_form_data(email)
             
-            # Используем intelligent_agent для заполнения формы
-            fill_result = await self.intelligent_agent.fill_registration_form(form_data)
+            # ПРИМЕЧАНИЕ: Заполнение формы теперь происходит в _intelligent_registration_flow
+            # через IntelligentRegistrationAgent
+            fill_result = {
+                "success": True,
+                "message": "Форма обрабатывается через intelligent_registration_flow",
+                "form_data": form_data
+            }
             
             step.status = "completed" if fill_result.get('success') else "failed"
             step.completed_at = datetime.now()
@@ -415,8 +467,16 @@ class RegistrationOrchestrator:
         self.steps.append(step)
         
         try:
-            # Анализируем текущее состояние через intelligent_agent
-            final_analysis = await self.intelligent_agent.analyze_registration_completion()
+            # Анализируем результаты всех шагов
+            final_analysis = {
+                "registration_successful": any(
+                    step.step_id == "intelligent_registration" and step.status == "completed"
+                    for step in self.steps
+                ),
+                "steps_completed": len([s for s in self.steps if s.status == "completed"]),
+                "total_steps": len(self.steps),
+                "analysis_method": "orchestrator_analysis"
+            }
             
             step.status = "completed"
             step.completed_at = datetime.now()
@@ -489,7 +549,7 @@ class RegistrationOrchestrator:
         
         # Определяем успешность регистрации
         account_created = any(
-            step.step_id == "form_filling" and step.status == "completed"
+            step.step_id == "intelligent_registration" and step.status == "completed"
             for step in self.steps
         )
         
@@ -535,18 +595,33 @@ class RegistrationOrchestrator:
             steps=self.steps,
             errors=errors,
             screenshots=screenshots,
-            final_url=self.intelligent_agent.get_current_url() if self.intelligent_agent else None,
+            final_url=self.current_registration.get('url') if self.current_registration else None,
             registration_data=self.current_registration
         )
     
     async def _cleanup_agents(self):
-        """Очищает ресурсы агентов"""
+        """Очищает ресурсы агентов и общий браузер"""
         try:
             if self.temp_mail_agent:
                 await self.temp_mail_agent.__aexit__(None, None, None)
             
-            if self.email_verification_agent:
-                await self.email_verification_agent.__aexit__(None, None, None)
+            # EmailVerificationAgent больше не имеет своего браузера
+            # Закрываем общий браузер
+            if self.shared_page:
+                await self.shared_page.close()
+                logger.info("Общая страница закрыта")
+                
+            if self.shared_context:
+                await self.shared_context.close()
+                logger.info("Общий контекст закрыт")
+                
+            if self.shared_browser:
+                await self.shared_browser.close()
+                logger.info("Общий браузер закрыт")
+                
+            if hasattr(self, 'playwright'):
+                await self.playwright.stop()
+                logger.info("Playwright остановлен")
                 
         except Exception as e:
             logger.warning(f"Ошибка при очистке агентов: {e}")

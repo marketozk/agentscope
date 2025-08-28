@@ -184,7 +184,42 @@ class IntelligentRegistrationAgent(BaseAgent):
                 'registration_goal': True,
                 'required_fields': ['email', 'username', 'password', 'first_name', 'last_name']
             })
+
+            # УПРОЩЕННАЯ СТРАТЕГИЯ: сначала заполнить поля, потом кликать кнопки
+            form_fields = [elem for elem in page_interface.interactive_elements 
+                          if elem.element_type == 'input' and elem.selector and 
+                          'name=' in elem.selector and elem.text.strip() == '']
             
+            # Если есть пустые поля - заполняем их
+            if form_fields:
+                print(f"🔧 Найдено {len(form_fields)} пустых полей для заполнения")
+                for field in form_fields[:3]:  # Заполняем первые 3 поля
+                    field_name = field.selector.split("name='")[-1].split("'")[0] if "name='" in field.selector else "unknown"
+                    
+                    # Пропускаем служебные поля
+                    if field_name in ['_csrf', 'referralCode', 'countryCode', 'didConsentToMarketing']:
+                        continue
+                    
+                    # Создаем действие заполнения
+                    fill_action = {
+                        'action': 'fill_field',
+                        'selector': field.selector,
+                        'field_name': field_name,
+                        'description': f'Заполнить поле {field_name}'
+                    }
+                    
+                    print(f"▶️ Заполняю поле: {field_name}")
+                    result = await self.interface_agent.execute_action(page, fill_action, self.user_data)
+                    
+                    if result.success:
+                        print(f"✅ Поле {field_name} заполнено")
+                        await asyncio.sleep(0.5)  # Пауза между заполнениями
+                    else:
+                        print(f"❌ Не удалось заполнить {field_name}: {result.message}")
+                
+                # После заполнения полей продолжаем
+                continue
+
             if not suggested_actions:
                 print("⚠️ Нет доступных действий")
                 # Пробуем стандартный анализ
@@ -202,8 +237,17 @@ class IntelligentRegistrationAgent(BaseAgent):
             for i, action in enumerate(suggested_actions[:3]):
                 print(f"  {i+1}. {action.get('description', action.get('action'))}")
             
+            # Фильтруем только поддерживаемые действия
+            supported_actions = ['fill_field', 'click_button', 'select_option', 'upload_file', 'wait_for_element']
+            valid_actions = [action for action in suggested_actions 
+                           if action.get('action') in supported_actions]
+            
+            if not valid_actions:
+                print("❌ Нет поддерживаемых действий")
+                continue
+            
             # Выбираем лучшее действие
-            best_action = suggested_actions[0]
+            best_action = valid_actions[0]
             print(f"▶️ Выполняю: {best_action.get('description', best_action.get('action'))}")
             
             # Подготавливаем данные для действия
@@ -232,9 +276,21 @@ class IntelligentRegistrationAgent(BaseAgent):
             else:
                 print(f"❌ {result.message}")
                 # Пробуем следующее действие если есть
-                if len(suggested_actions) > 1:
+                if len(valid_actions) > 1:
                     print("🔄 Пробую альтернативное действие...")
-                    continue
+                    for alt_action in valid_actions[1:3]:  # Пробуем следующие 2 действия
+                        print(f"▶️ Альтернатива: {alt_action.get('description', alt_action.get('action'))}")
+                        alt_result = await self.interface_agent.execute_action(page, alt_action, self.user_data)
+                        if alt_result.success:
+                            print(f"✅ Альтернативное действие успешно")
+                            result = alt_result
+                            break
+                        else:
+                            print(f"❌ Альтернатива не сработала: {alt_result.message}")
+                    
+                    if not result.success:
+                        print("⚠️ Все альтернативы провалились, продолжаю...")
+                        continue
         
         return {
             "success": False,
