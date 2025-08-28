@@ -5,6 +5,7 @@ pillow==10.1.0
 python-dotenv==1.0.0
 
 # Зависимости для AgentScope
+agentscope>=0.0.5
 packaging>=23.0
 pydantic>=2.0.0
 

@@ -25,8 +25,78 @@ class EmailVerificationAgent:
     async def __aenter__(self):
         """Асинхронный контекст менеджер"""
         playwright = await async_playwright().start()
-        self.browser = await playwright.chromium.launch(headless=self.headless)
-        self.page = await self.browser.new_page()
+        
+        # Настройки для полной маскировки автоматизации
+        browser_args = [
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-features=VizDisplayCompositor',
+            '--disable-ipc-flooding-protection',
+            '--disable-renderer-backgrounding',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-field-trial-config',
+            '--disable-back-forward-cache',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding',
+            '--disable-features=TranslateUI',
+            '--disable-features=BlinkGenPropertyTrees',
+            '--no-sandbox',
+            '--disable-web-security',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--hide-scrollbars',
+            '--mute-audio',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-sync',
+            '--disable-translate',
+            '--disable-logging',
+            '--disable-permissions-api',
+            '--disable-client-side-phishing-detection',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-hang-monitor',
+            '--disable-prompt-on-repost',
+            '--disable-domain-reliability',
+            '--disable-component-update',
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ]
+        
+        self.browser = await playwright.chromium.launch(
+            headless=self.headless,
+            slow_mo=300,
+            args=browser_args,
+            channel="chrome"
+        )
+        
+        # Создаем контекст с реальными настройками
+        context = await self.browser.new_context(
+            viewport={'width': 1366, 'height': 768},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            locale='en-US',
+            timezone_id='America/New_York',
+            extra_http_headers={
+                'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+            }
+        )
+        
+        self.page = await context.new_page()
+        
+        # Маскировка webdriver
+        await self.page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+            
+            // Удаляем следы автоматизации
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+        """)
+        
         return self
         
     async def __aexit__(self, exc_type, exc_val, exc_tb):

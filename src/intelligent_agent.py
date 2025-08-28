@@ -30,7 +30,21 @@ class IntelligentRegistrationAgent(BaseAgent):
         """Анализирует страницу по URL"""
         async with async_playwright() as p:
             browser = await self.browser_agent.create_browser(p, headless=True)
-            page = await browser.new_page()
+            
+            # Создаем контекст с реальными настройками
+            context = await browser.new_context(
+                viewport={'width': 1366, 'height': 768},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                locale='en-US',
+                timezone_id='America/New_York',
+                extra_http_headers={
+                    'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+                }
+            )
+            
+            page = await context.new_page()
             
             try:
                 await page.goto(url, wait_until='networkidle')
@@ -89,7 +103,24 @@ class IntelligentRegistrationAgent(BaseAgent):
         async with async_playwright() as p:
             # Создаём браузер
             browser = await self.browser_agent.create_browser(p, headless=False)
-            page = await browser.new_page()
+            
+            # Создаем контекст с реальными настройками
+            context = await browser.new_context(
+                viewport={'width': 1366, 'height': 768},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                locale='en-US',
+                timezone_id='America/New_York',
+                permissions=['geolocation', 'notifications'],
+                extra_http_headers={
+                    'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                }
+            )
+            
+            page = await context.new_page()
             
             try:
                 # Настройка страницы
@@ -324,11 +355,45 @@ class IntelligentRegistrationAgent(BaseAgent):
     
     async def _setup_page(self, page: Page):
         """Настройка страницы для обхода защиты"""
+        
+        # Маскировка webdriver
         await page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => false,
             });
         """)
+        
+        # Дополнительная маскировка автоматизации
+        await page.add_init_script("""
+            // Удаляем следы автоматизации
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+            delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+            
+            // Переопределяем permissions API
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // Маскируем languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en', 'ru']
+            });
+            
+            // Маскируем plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+        """)
+        
+        # Устанавливаем viewport и user agent
+        await page.set_viewport_size({"width": 1366, "height": 768})
+        await page.set_extra_http_headers({
+            'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8'
+        })
     
     async def _analyze_page(self, page: Page) -> Dict[str, Any]:
         """Анализ текущей страницы"""

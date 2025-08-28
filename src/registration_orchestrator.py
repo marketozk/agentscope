@@ -50,7 +50,7 @@ class RegistrationOrchestrator:
         self.config = config or self._get_default_config()
         self.temp_mail_agent = None
         self.email_verification_agent = None
-        self.intelligent_agent = None
+        # Убираем intelligent_agent - orchestrator создаст свой own intelligent logic
         
         self.current_registration = None
         self.steps = []
@@ -99,22 +99,20 @@ class RegistrationOrchestrator:
             # Инициализируем агентов
             await self._initialize_agents()
             
+            # Генерируем пользовательские данные если не переданы
+            if not user_data or not user_data.get('email'):
+                await self._generate_user_data()
+            
             # Создаем временный email
             email_step = await self._create_temp_email()
             
-            # Переходим на страницу регистрации и анализируем
-            navigation_step = await self._navigate_and_analyze(registration_url)
+            # Запускаем интеллектуальную регистрацию с ПОЛНОЙ МОЩНОСТЬЮ
+            registration_step = await self._intelligent_registration_flow(registration_url)
             
-            # Заполняем форму регистрации
-            form_step = await self._fill_registration_form(email_step.result.get('email'))
+            # Проверяем подтверждение email если требуется
+            if registration_step.result and registration_step.result.get('email_verification_required'):
+                await self._handle_email_verification()
             
-            # Обрабатываем email верификацию (если требуется)
-            verification_step = await self._handle_email_verification()
-            
-            # Анализируем финальный результат
-            final_step = await self._analyze_final_result()
-            
-            # Формируем итоговый результат
             return self._create_final_result()
             
         except Exception as e:
@@ -154,16 +152,8 @@ class RegistrationOrchestrator:
             )
             await self.email_verification_agent.__aenter__()
             
-            # Инициализируем IntelligentRegistrationAgent
-            import os
-            from dotenv import load_dotenv
-            load_dotenv()
-            
-            api_key = os.getenv('GOOGLE_API_KEY') or os.getenv('GEMINI_API_KEY')
-            if not api_key:
-                raise ValueError("Google API ключ не найден в переменных окружения")
-                
-            self.intelligent_agent = IntelligentRegistrationAgent(api_key)
+            # IntelligentAgent передается извне, не создаем здесь!
+            # Убираем дублирование - используем переданный экземпляр
             
             step.status = "completed"
             step.completed_at = datetime.now()
@@ -175,6 +165,68 @@ class RegistrationOrchestrator:
             step.status = "failed"
             step.error = str(e)
             step.completed_at = datetime.now()
+            raise
+    
+    async def _generate_user_data(self) -> RegistrationStep:
+        """Генерирует реалистичные данные пользователя с полной мощностью"""
+        step = RegistrationStep(
+            step_id="user_data_generation",
+            step_name="Генерация данных пользователя",
+            status="in_progress",
+            started_at=datetime.now()
+        )
+        self.steps.append(step)
+        
+        try:
+            import random
+            import string
+            from datetime import datetime
+            
+            # Генерируем уникальные данные
+            timestamp = int(datetime.now().timestamp())
+            random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
+            
+            # Базовые данные
+            first_names = ["Alex", "Jordan", "Taylor", "Morgan", "Casey", "Riley", "Avery", "Quinn"]
+            last_names = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis"]
+            
+            first_name = random.choice(first_names)
+            last_name = random.choice(last_names)
+            username = f"{first_name.lower()}{last_name.lower()}{random_suffix}"
+            
+            # Полный набор данных пользователя
+            user_data = {
+                'username': username,
+                'first_name': first_name,
+                'last_name': last_name,
+                'full_name': f'{first_name} {last_name}',
+                'password': f'SecurePass{random.randint(1000, 9999)}!',
+                'phone': f'+1{random.randint(2000000000, 9999999999)}',
+                'birth_date': f'{random.randint(1985, 2000)}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}',
+                'company': f'{random.choice(["Tech", "Digital", "Global", "Pro", "Smart"])} {random.choice(["Solutions", "Systems", "Labs", "Works", "Corp"])}',
+                'website': f'https://{username}.com',
+                'country': 'United States',
+                'city': random.choice(['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix']),
+                'zip_code': f'{random.randint(10000, 99999)}',
+                'address': f'{random.randint(100, 9999)} {random.choice(["Main", "Oak", "Pine", "Cedar", "Elm"])} St',
+                'gender': random.choice(['male', 'female', 'prefer_not_to_say'])
+            }
+            
+            # Сохраняем в текущую регистрацию
+            self.current_registration['user_data'].update(user_data)
+            
+            step.status = "completed"
+            step.completed_at = datetime.now()
+            step.result = {"user_data_generated": True, "user_data": user_data}
+            
+            logger.info(f"Данные пользователя сгенерированы: {user_data['full_name']}")
+            return step
+            
+        except Exception as e:
+            step.status = "failed"
+            step.error = str(e)
+            step.completed_at = datetime.now()
+            logger.error(f"Ошибка генерации данных пользователя: {e}")
             raise
     
     async def _create_temp_email(self) -> RegistrationStep:
@@ -211,41 +263,55 @@ class RegistrationOrchestrator:
             logger.error(f"Ошибка создания временного email: {e}")
             raise
     
-    async def _navigate_and_analyze(self, url: str) -> RegistrationStep:
-        """Переходит на страницу и анализирует её"""
+    async def _intelligent_registration_flow(self, url: str) -> RegistrationStep:
+        """Интеллектуальный процесс регистрации с ПОЛНОЙ МОЩНОСТЬЮ всех агентов"""
         step = RegistrationStep(
-            step_id="navigation",
-            step_name="Навигация и анализ страницы",
+            step_id="intelligent_registration",
+            step_name="Интеллектуальная регистрация",
             status="in_progress",
             started_at=datetime.now()
         )
         self.steps.append(step)
         
         try:
-            # Используем intelligent_agent для навигации и анализа
-            analysis_result = await self.intelligent_agent.execute(url)
+            from .intelligent_agent import IntelligentRegistrationAgent
+            from playwright.async_api import async_playwright
             
-            # Преобразуем результат в ожидаемый формат
-            formatted_result = {
-                "page_type": "registration_page" if analysis_result else "unknown",
-                "success": analysis_result,
-                "forms_found": analysis_result,
+            # Получаем API ключ из config
+            api_key = self.config.get('gemini_api_key')
+            if not api_key:
+                raise ValueError("Gemini API ключ не найден")
+            
+            # Создаем intelligent agent с ПОЛНОЙ мощностью
+            intelligent_agent = IntelligentRegistrationAgent(api_key)
+            
+            # Устанавливаем данные пользователя в agent
+            if hasattr(intelligent_agent, 'context'):
+                intelligent_agent.context.update(self.current_registration.get('user_data', {}))
+                intelligent_agent.context['email'] = self.current_registration.get('email', '')
+            
+            # Выполняем регистрацию через агента с ПОЛНОЙ мощностью
+            result = await intelligent_agent.execute(url)
+            
+            # Обрабатываем результат
+            step.status = "completed" if result else "failed"
+            step.completed_at = datetime.now()
+            step.result = {
+                "registration_completed": result,
+                "account_created": result,
                 "url": url,
-                "analysis_complete": True
+                "analysis_complete": True,
+                "email_verification_required": False  # Определим позже
             }
             
-            step.status = "completed" if analysis_result else "failed"
-            step.completed_at = datetime.now()
-            step.result = formatted_result
-            
-            logger.info(f"Страница проанализирована: {formatted_result.get('page_type', 'unknown')}")
+            logger.info(f"Интеллектуальная регистрация завершена: {result}")
             return step
             
         except Exception as e:
             step.status = "failed"
             step.error = str(e)
             step.completed_at = datetime.now()
-            logger.error(f"Ошибка навигации и анализа: {e}")
+            logger.error(f"Ошибка интеллектуальной регистрации: {e}")
             raise
     
     async def _fill_registration_form(self, email: str) -> RegistrationStep:
