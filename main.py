@@ -19,6 +19,10 @@ try:
     from agentscope.memory import InMemoryMemory
     from src.element_finder_agent import ElementFinderAgent, ElementSearchResult
     from src.error_recovery_agent import ErrorRecoveryAgent, RecoveryResult
+    from src.form_filler_agent import FormFillerAgent, FormFillResult
+    from src.checkbox_agent import CheckboxAgent, CheckboxActionResult
+    from src.page_analyzer_agent import PageAnalyzerAgent, PageAnalysis
+    from src.registration_orchestrator import RegistrationOrchestrator
     AGENTSCOPE_AVAILABLE = True
     print("✅ AgentScope модули загружены успешно")
 except ImportError as e:
@@ -42,6 +46,10 @@ class IntelligentRegistrationAgent:
         # Новые AgentScope агенты (инициализируются позже с page)
         self.element_finder_agent = None
         self.error_recovery_agent = None
+        self.form_filler_agent = None
+        self.checkbox_agent = None
+        self.page_analyzer_agent = None
+        self.registration_orchestrator = None
         
         # Настройки скорости выполнения
         self.action_delay = 3.0  # Пауза между действиями (секунды)
@@ -81,17 +89,74 @@ class IntelligentRegistrationAgent:
                     api_key=os.getenv("GEMINI_API_KEY"),
                 )
                 
+                # Инициализируем все агенты
                 self.element_finder_agent = ElementFinderAgent(page, model)
                 self.error_recovery_agent = ErrorRecoveryAgent(page, model)
-                print("✅ AgentScope агенты инициализированы")
+                self.form_filler_agent = FormFillerAgent(page, model)
+                self.checkbox_agent = CheckboxAgent(page, model)
+                self.page_analyzer_agent = PageAnalyzerAgent(page, model)
+                
+                # Инициализируем RegistrationOrchestrator для координации
+                self.registration_orchestrator = RegistrationOrchestrator()
+                print("✅ Все AgentScope агенты и оркестратор инициализированы")
             except Exception as e:
                 print(f"⚠️ Ошибка инициализации агентов: {e}")
                 self.element_finder_agent = None
                 self.error_recovery_agent = None
+                self.form_filler_agent = None
+                self.checkbox_agent = None
+                self.page_analyzer_agent = None
+                self.registration_orchestrator = None
         else:
             print("⚠️ AgentScope недоступен, используем fallback методы")
             self.element_finder_agent = None
             self.error_recovery_agent = None
+            self.form_filler_agent = None
+            self.checkbox_agent = None
+            self.page_analyzer_agent = None
+            self.registration_orchestrator = None
+        
+    async def register_with_orchestrator(self, referral_link: str):
+        """
+        Новый метод регистрации через RegistrationOrchestrator
+        Обеспечивает централизованную координацию агентов
+        """
+        if not AGENTSCOPE_AVAILABLE or not self.registration_orchestrator:
+            print("⚠️ RegistrationOrchestrator недоступен, используем стандартный метод")
+            return await self.register(referral_link)
+        
+        print("\n🎭 РЕГИСТРАЦИЯ ЧЕРЕЗ ORCHESTRATOR")
+        print("=" * 60)
+        
+        try:
+            # Передаем URL и пользовательские данные в оркестратор
+            user_data = {
+                "registration_url": referral_link,
+                "user_context": self.context.copy()
+            }
+            
+            print("🎯 Запуск процесса через RegistrationOrchestrator...")
+            result = await self.registration_orchestrator.start_registration(
+                registration_url=referral_link,
+                user_data=user_data
+            )
+            
+            if result.success:
+                print("✅ Регистрация через оркестратор завершена успешно!")
+                print(f"📧 Email верифицирован: {result.email_verified}")
+                print(f"🔗 Финальный URL: {result.final_url}")
+                return True
+            else:
+                print("❌ Ошибка в процессе оркестратора:")
+                for error in result.errors:
+                    print(f"   💥 {error}")
+                print("🔄 Переключаемся на стандартный метод...")
+                return await self.register(referral_link)
+                
+        except Exception as e:
+            print(f"❌ Критическая ошибка оркестратора: {e}")
+            print("🔄 Переключаемся на стандартный метод...")
+            return await self.register(referral_link)
         
     async def generate_user_data(self):
         """Генерация случайных данных пользователя с реальным временным email"""
@@ -913,8 +978,97 @@ class IntelligentRegistrationAgent:
                 print("🔚 Браузер закрыт. Процесс завершен.")
     
     async def analyze_and_decide(self, screenshot: bytes, page_html: str, current_url: str) -> dict:
-        """Gemini анализирует страницу и принимает решение о действиях"""
+        """Анализирует страницу и принимает решение о действиях (с PageAnalyzerAgent)"""
         try:
+            # Используем PageAnalyzerAgent если доступен
+            if AGENTSCOPE_AVAILABLE and self.page_analyzer_agent:
+                print("   🤖 Используем PageAnalyzer Agent для глубокого анализа...")
+                try:
+                    page_analysis = await self.page_analyzer_agent.analyze_current_page()
+                    
+                    print(f"   📄 Тип страницы: {page_analysis.page_type} (confidence: {page_analysis.page_confidence:.2f})")
+                    print(f"   🎯 Основное действие: {page_analysis.main_action}")
+                    print(f"   📊 Найдено элементов: {len(page_analysis.interactive_elements)}")
+                    
+                    # Преобразуем анализ PageAnalyzer в формат для execute_gemini_actions_slowly
+                    actions = []
+                    
+                    if page_analysis.page_type == "registration":
+                        # Для страницы регистрации создаем действия заполнения формы
+                        form_elements = [e for e in page_analysis.interactive_elements if e.element_type in ['input', 'textarea']]
+                        for element in form_elements[:5]:  # Ограничиваем количество
+                            field_value = self._get_value_for_field(element.text, element.attributes)
+                            if field_value:
+                                actions.append({
+                                    "type": "fill",
+                                    "selector": element.selector,
+                                    "value": field_value,
+                                    "description": f"Заполнение поля: {element.text[:30]}",
+                                    "required": True
+                                })
+                        
+                        # Добавляем обработку чекбоксов
+                        checkbox_elements = [e for e in page_analysis.interactive_elements if e.element_type == 'input' and e.attributes.get('type') == 'checkbox']
+                        for checkbox in checkbox_elements[:3]:
+                            actions.append({
+                                "type": "check" if "terms" in checkbox.text.lower() or "privacy" in checkbox.text.lower() else "uncheck",
+                                "selector": checkbox.selector,
+                                "value": "",
+                                "description": f"Чекбокс: {checkbox.text[:30]}",
+                                "required": False
+                            })
+                        
+                        # Добавляем кнопку продолжения
+                        button_elements = [e for e in page_analysis.interactive_elements if e.element_type == 'button']
+                        if button_elements:
+                            actions.append({
+                                "type": "click",
+                                "selector": button_elements[0].selector,
+                                "value": "",
+                                "description": f"Кнопка: {button_elements[0].text[:30]}",
+                                "required": True
+                            })
+                    
+                    elif page_analysis.page_type == "success":
+                        return {
+                            "page_analysis": "Страница успешного завершения",
+                            "page_type": "success",
+                            "completed": True,
+                            "actions": [],
+                            "next_step": "Регистрация завершена"
+                        }
+                    
+                    else:
+                        # Для других типов страниц ищем основные кнопки
+                        button_elements = [e for e in page_analysis.interactive_elements if e.element_type == 'button']
+                        for button in button_elements[:2]:
+                            actions.append({
+                                "type": "click",
+                                "selector": button.selector,
+                                "value": "",
+                                "description": f"Кнопка: {button.text[:30]}",
+                                "required": False
+                            })
+                    
+                    return {
+                        "page_analysis": page_analysis.reasoning,
+                        "page_type": page_analysis.page_type,
+                        "completed": page_analysis.page_type == "success",
+                        "actions": actions,
+                        "detected_elements": {
+                            "forms": [str(page_analysis.forms_count)],
+                            "buttons": [e.text[:30] for e in page_analysis.interactive_elements if e.element_type == 'button'][:3],
+                            "links": page_analysis.navigation_options[:3]
+                        },
+                        "next_step": page_analysis.next_step_prediction
+                    }
+                    
+                except Exception as e:
+                    print(f"   ❌ Ошибка PageAnalyzer Agent: {e}")
+                    # Fallback к Gemini
+            
+            # Fallback к оригинальному Gemini анализу
+            print("   🤖 Используем Gemini AI для анализа...")
             image = Image.open(io.BytesIO(screenshot))
             
             prompt = f"""
@@ -1104,20 +1258,48 @@ class IntelligentRegistrationAgent:
             try:
                 if action_type == "fill":
                     print("   🔍 Поиск поля для ввода...")
-                    element = await page.wait_for_selector(selector, timeout=10000)
-                    if element:
-                        print("   ✅ Поле найдено!")
-                        print(f"   ⌨️ Человекоподобный ввод текста: '{value}'")
-                        
-                        # Используем человекоподобный ввод
-                        await self.human_like_fill(element, value)
-                        
-                        print(f"   ✅ Поле заполнено успешно!")
-                        success_count += 1
+                    
+                    # Используем FormFillerAgent если доступен
+                    if AGENTSCOPE_AVAILABLE and self.form_filler_agent:
+                        print("   🤖 Используем FormFiller Agent...")
+                        try:
+                            from src.form_filler_agent import FormFieldInfo
+                            field_info = FormFieldInfo(
+                                selector=selector,
+                                field_type="text",
+                                label=description,
+                                placeholder="",
+                                required=required,
+                                validation_pattern=None,
+                                confidence=0.8
+                            )
+                            
+                            fill_success = await self.form_filler_agent.fill_specific_field(field_info, value)
+                            if fill_success:
+                                print(f"   ✅ FormFiller Agent успешно заполнил поле!")
+                                success_count += 1
+                            else:
+                                print(f"   ⚠️ FormFiller Agent не смог заполнить поле")
+                        except Exception as e:
+                            print(f"   ❌ Ошибка FormFiller Agent: {e}")
+                            # Fallback к стандартному методу
+                            element = await page.wait_for_selector(selector, timeout=10000)
+                            if element:
+                                await self.human_like_fill(element, value)
+                                success_count += 1
                     else:
-                        print(f"   ❌ Поле не найдено по селектору: {selector}")
-                        if required:
-                            return False
+                        # Стандартный метод
+                        element = await page.wait_for_selector(selector, timeout=10000)
+                        if element:
+                            print("   ✅ Поле найдено!")
+                            print(f"   ⌨️ Человекоподобный ввод текста: '{value}'")
+                            await self.human_like_fill(element, value)
+                            print(f"   ✅ Поле заполнено успешно!")
+                            success_count += 1
+                        else:
+                            print(f"   ❌ Поле не найдено по селектору: {selector}")
+                            if required:
+                                return False
                         
                 elif action_type == "select":
                     print("   🔍 Поиск выпадающего списка...")
@@ -1145,35 +1327,80 @@ class IntelligentRegistrationAgent:
                             
                 elif action_type == "check":
                     print("   🔍 Поиск чекбокса для отметки...")
-                    element = await page.wait_for_selector(selector, timeout=10000)
-                    if element:
-                        print("   ✅ Чекбокс найден!")
-                        is_checked = await element.is_checked()
-                        if not is_checked:
-                            print("   ☑️ Человекоподобная отметка чекбокса...")
-                            await self.human_like_element_click(page, element)
-                            print("   ✅ Чекбокс отмечен!")
-                        else:
-                            print("   ℹ️ Чекбокс уже отмечен")
-                        success_count += 1
+                    
+                    # Используем CheckboxAgent если доступен
+                    if AGENTSCOPE_AVAILABLE and self.checkbox_agent:
+                        print("   🤖 Используем Checkbox Agent...")
+                        try:
+                            checkbox_result = await self.checkbox_agent.handle_specific_checkbox(
+                                selector, "check", f"Отметка чекбокса: {description}"
+                            )
+                            if checkbox_result.success:
+                                print(f"   ✅ Checkbox Agent: {checkbox_result.action_taken}")
+                                success_count += 1
+                            else:
+                                print(f"   ⚠️ Checkbox Agent: {checkbox_result.reasoning}")
+                        except Exception as e:
+                            print(f"   ❌ Ошибка Checkbox Agent: {e}")
+                            # Fallback к стандартному методу
+                            element = await page.wait_for_selector(selector, timeout=10000)
+                            if element and not await element.is_checked():
+                                await self.human_like_element_click(page, element)
+                                success_count += 1
                     else:
-                        print(f"   ❌ Чекбокс не найден")
+                        # Стандартный метод
+                        element = await page.wait_for_selector(selector, timeout=10000)
+                        if element:
+                            print("   ✅ Чекбокс найден!")
+                            is_checked = await element.is_checked()
+                            if not is_checked:
+                                print("   ☑️ Человекоподобная отметка чекбокса...")
+                                await self.human_like_element_click(page, element)
+                                print("   ✅ Чекбокс отмечен!")
+                            else:
+                                print("   ℹ️ Чекбокс уже отмечен")
+                            success_count += 1
+                            success_count += 1
+                        else:
+                            print(f"   ❌ Чекбокс не найден")
                         
                 elif action_type == "uncheck":
                     print("   🔍 Поиск чекбокса для снятия отметки...")
-                    element = await page.wait_for_selector(selector, timeout=10000)
-                    if element:
-                        print("   ✅ Чекбокс найден!")
-                        is_checked = await element.is_checked()
-                        if is_checked:
-                            print("   ☐ Человекоподобное снятие отметки...")
-                            await self.human_like_element_click(page, element)
-                            print("   ✅ Отметка снята!")
-                        else:
-                            print("   ℹ️ Чекбокс уже не отмечен")
-                        success_count += 1
+                    
+                    # Используем CheckboxAgent если доступен
+                    if AGENTSCOPE_AVAILABLE and self.checkbox_agent:
+                        print("   🤖 Используем Checkbox Agent...")
+                        try:
+                            checkbox_result = await self.checkbox_agent.handle_specific_checkbox(
+                                selector, "uncheck", f"Снятие отметки чекбокса: {description}"
+                            )
+                            if checkbox_result.success:
+                                print(f"   ✅ Checkbox Agent: {checkbox_result.action_taken}")
+                                success_count += 1
+                            else:
+                                print(f"   ⚠️ Checkbox Agent: {checkbox_result.reasoning}")
+                        except Exception as e:
+                            print(f"   ❌ Ошибка Checkbox Agent: {e}")
+                            # Fallback к стандартному методу
+                            element = await page.wait_for_selector(selector, timeout=10000)
+                            if element and await element.is_checked():
+                                await self.human_like_element_click(page, element)
+                                success_count += 1
                     else:
-                        print(f"   ❌ Чекбокс не найден")
+                        # Стандартный метод
+                        element = await page.wait_for_selector(selector, timeout=10000)
+                        if element:
+                            print("   ✅ Чекбокс найден!")
+                            is_checked = await element.is_checked()
+                            if is_checked:
+                                print("   ☐ Человекоподобное снятие отметки...")
+                                await self.human_like_element_click(page, element)
+                                print("   ✅ Отметка снята!")
+                            else:
+                                print("   ℹ️ Чекбокс уже не отмечен")
+                            success_count += 1
+                        else:
+                            print(f"   ❌ Чекбокс не найден")
                         
                 elif action_type == "click":
                     print("   🔍 Поиск элемента для клика...")
@@ -1319,6 +1546,60 @@ async def main():
     agent = IntelligentRegistrationAgent(api_key)
     
     # Автоматически используем Airtable реферальную ссылку
+    def _get_value_for_field(self, field_text: str, attributes: dict) -> str:
+        """Определяет значение для поля на основе его текста и атрибутов"""
+        field_text = field_text.lower()
+        field_type = attributes.get('type', '').lower()
+        field_name = attributes.get('name', '').lower()
+        field_class = attributes.get('class', '').lower()
+        
+        combined = f"{field_text} {field_type} {field_name} {field_class}"
+        
+        # Email поля
+        if any(keyword in combined for keyword in ['email', 'mail', 'e-mail']):
+            return self.context.get('email', '')
+        
+        # Пароль
+        elif any(keyword in combined for keyword in ['password', 'pass', 'pwd']):
+            return self.context.get('password', '')
+        
+        # Имя
+        elif any(keyword in combined for keyword in ['first', 'fname', 'firstname']):
+            return self.context.get('first_name', '')
+        elif any(keyword in combined for keyword in ['last', 'lname', 'lastname']):
+            return self.context.get('last_name', '')
+        elif 'name' in combined and 'user' not in combined:
+            return f"{self.context.get('first_name', '')} {self.context.get('last_name', '')}"
+        
+        # Username
+        elif any(keyword in combined for keyword in ['username', 'user', 'login']):
+            return self.context.get('username', '')
+        
+        # Телефон
+        elif any(keyword in combined for keyword in ['phone', 'tel', 'mobile']):
+            return self.context.get('phone', '')
+        
+        # Компания
+        elif any(keyword in combined for keyword in ['company', 'organization', 'business']):
+            return self.context.get('company', '')
+        
+        # Сайт
+        elif any(keyword in combined for keyword in ['website', 'url', 'site']):
+            return self.context.get('website', '')
+        
+        # Дата рождения
+        elif any(keyword in combined for keyword in ['birth', 'born', 'date', 'birthday']):
+            return self.context.get('birth_date', '')
+        
+        return ""  # Если не удалось определить тип поля
+
+async def main():
+    print("🚀 Запуск системы умной регистрации...")
+    
+    agent = IntelligentRegistrationAgent(
+        gemini_api_key=os.getenv("GEMINI_API_KEY")
+    )
+    
     referral_link = "https://airtable.com/invite/r/ovoAP1zR"
     print(f"🔗 Используем реферальную ссылку: {referral_link}")
     
