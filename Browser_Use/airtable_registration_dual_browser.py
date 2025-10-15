@@ -155,6 +155,19 @@ def parse_agent_result(result: Any) -> dict:
     return parsed
 
 
+class EmailParserResult(BaseModel):
+    """Результат парсинга email с temp-mail.org"""
+    email: str = Field(
+        description="Полученный временный email адрес (например: user123@gamegta.com)"
+    )
+    success: bool = Field(
+        description="Успешно ли получен email"
+    )
+    notes: str = Field(
+        description="Дополнительная информация о процессе"
+    )
+
+
 class DualBrowserRegistration:
     """Регистрация: агент сам управляет двумя браузерами"""
 
@@ -167,257 +180,369 @@ class DualBrowserRegistration:
         self.notes: str = ""
         self.rate_limited_llm: Optional[RateLimitedLLM] = None
 
-    def build_master_mission(self) -> str:
-        """Единая миссия: агент сам решает, как использовать два браузера"""
-        return f"""
+    def build_email_parser_mission(self) -> str:
+        """ШАГ 1: Миссия для парсинга email с temp-mail.org"""
+        return """
+MISSION: Get temporary email from temp-mail.org
 
-MISSION GOAL:
-  Register a new Airtable account using {self.referral_url} and a temporary email from temp-mail.org,
-  then confirm the account via email. 
+YOUR TASK:
+  You need to extract a temporary email address from https://temp-mail.org/en/
 
-NOTE: Two tabs are already open for you:
-  - Tab 1: https://temp-mail.org/en/ (temporary email service)
-  - Tab 2: {self.referral_url} (Airtable registration page)
+CRITICAL STEPS:
+  1. WAIT 20 seconds after page loads (email needs time to generate)
+  2. LOCATE the email address on the page using one of these methods:
+     - Method A: Extract text from the main email display area
+     - Method B: Use JavaScript: document.querySelector('#mail').textContent
+     - Method C: Use vision API to read email from screenshot
+     - Method D: Look for any visible text matching email pattern (xxx@yyy.zzz)
+  
+  3. VERIFY you found a valid email (must contain @ and domain)
+  4. RETURN the email in structured format
 
-CRITICAL WORKFLOW WITH TIMING:
-  📧 PHASE 1: GET TEMPORARY EMAIL (Tab 1)
-  -------------------------------------------
-  - STEP 1: Switch to temp-mail tab (Tab 1)
-  - STEP 2: WAIT 20 seconds for page to fully load and email to generate
-  - STEP 3: FIND the email address on the page
-    * Try method 1: Extract text from the email display area
-    * Try method 2: Use JavaScript: document.querySelector('#mail').textContent
-    * Try method 3: Use vision to read the email from screenshot
-  - STEP 4: MEMORIZE the exact email (write: "Temporary email obtained: xyz@domain.com")
-  - STEP 5: VERIFY you have the email before proceeding
-  
-  📝 PHASE 2: REGISTER ON AIRTABLE (Tab 2)
-  -------------------------------------------
-  - STEP 6: Switch to Airtable registration tab (Tab 2)
-  - STEP 7: WAIT 5 seconds for registration form to fully load
-  - STEP 8: Fill the registration form CAREFULLY:
-    * Email field: Type the EXACT temp-mail address from Phase 1 (DO NOT INVENT!)
-    * Full Name field: Generate realistic name (e.g., "Sarah Mitchell")
-    * Password field: Generate strong password (e.g., "SecureP@ss2024!")
-    * Checkboxes: Check all required boxes (Terms of Service, Privacy Policy)
-  
-  - STEP 9: BEFORE submitting - DOUBLE CHECK:
-    * Email field contains the correct temp-mail address
-    * Name and password are filled
-    * All checkboxes are checked
-  
-  - STEP 10: Click "Create account" button ONCE
-  - STEP 11: WAIT 10 seconds and observe the result:
-    * Success: URL changed to dashboard or verification page
-    * Loading: Button disabled with spinner → wait 10 more seconds
-    * Error: Read error message and decide next action
-  
-  ✉️ PHASE 3: CONFIRM EMAIL (Tab 1)
-  -------------------------------------------
-  - STEP 12: Switch back to temp-mail tab (Tab 1)
-  - STEP 13: WAIT 30 seconds for confirmation email to arrive
-  - STEP 14: Look for email from Airtable with subject about verification
-  - STEP 15: Open the email from Airtable
-  - STEP 16: Find and click the confirmation/verification link in the email
-  - STEP 17: WAIT 5 seconds for confirmation to process
-  - STEP 18: Check if account is now verified (look for success message)
-
-ANTI-LOOP PROTECTION:
-  If you repeat the same action 3+ times without progress:
-  ⛔ STOP and ANALYZE:
-    - What am I trying to do?
-    - What's blocking me?
-    - Did my last action succeed? (Check URL, page state, elements)
-  
-  🔄 TRY DIFFERENT APPROACH:
-    - Email not found on temp-mail? → Refresh page or get new email
-    - Registration button not working? → Check for inline error messages
-    - Email domain blocked by Airtable? → Go back, get NEW email with different domain
-    - Confirmation email not arriving? → Wait longer (up to 60 seconds)
-    - Action succeeded but system says "Failure"? → Ignore verdict, check actual page state
-  
-  ❌ NEVER:
-    - Click same button more than 3 times
-    - Fill same field more than 2 times (if filled successfully, move on!)
-    - Wait indefinitely (max wait: 60 seconds for any step)
-  
-  ✅ WHEN STUCK:
-    1. PAUSE (stop current action)
-    2. OBSERVE (read current page state, URL, errors)
-    3. DECIDE (what's the next best action?)
-    4. EXECUTE (try new approach)
+ANTI-LOOP RULES:
+  - If email not visible after 20s → Refresh page ONCE
+  - If still not visible → Try different selector or JavaScript
+  - Maximum 3 attempts total
+  - DO NOT click random elements hoping to find email
 
 OUTPUT FORMAT (MANDATORY):
-  When task is complete, you MUST return structured data in this exact format:
+  {
+    "email": "the-extracted-email@domain.com",
+    "success": true,
+    "notes": "Email successfully extracted using method X"
+  }
+
+IMPORTANT:
+  - Email MUST be valid format (xxx@domain.com)
+  - DO NOT invent or guess email
+  - If you can't find email after 3 attempts, set success=false
+"""
+
+    def build_registration_mission(self, email: str) -> str:
+        """ШАГ 2: Миссия для регистрации с полученным email"""
+        return f"""
+MISSION: Register on Airtable using provided email
+
+YOUR EMAIL: {email}
+REGISTRATION URL: {self.referral_url}
+
+YOUR TASK:
+  Register a new Airtable account using the email above and confirm via email.
+
+CRITICAL WORKFLOW:
+  📝 PHASE 1: REGISTER ON AIRTABLE
+  -------------------------------------------
+  - STEP 1: Navigate to {self.referral_url}
+  - STEP 2: WAIT 5 seconds for form to load
+  - STEP 3: Fill registration form:
+    * Email: {email} (EXACTLY this email, DO NOT MODIFY!)
+    * Full Name: Generate realistic name (e.g., "Sarah Mitchell")
+    * Password: Generate strong password (e.g., "SecureP@ss2024!")
+    * Checkboxes: Check all required (Terms, Privacy Policy)
+  
+  - STEP 4: VERIFY before submitting:
+    * Email field = {email}
+    * Name and password filled
+    * Checkboxes checked
+  
+  - STEP 5: Click "Create account" ONCE
+  - STEP 6: WAIT 10 seconds and check result:
+    * Success: URL changed to dashboard/verification page
+    * Loading: Wait 10 more seconds
+    * Error: Read message and report
+
+  ✉️ PHASE 2: CONFIRM EMAIL
+  -------------------------------------------
+  - STEP 7: Open NEW TAB with https://temp-mail.org/en/
+  - STEP 8: WAIT 30 seconds for confirmation email from Airtable
+  - STEP 9: Look for email with "verify" or "confirm" in subject
+  - STEP 10: Open that email
+  - STEP 11: Click the confirmation/verification link
+  - STEP 12: WAIT 5 seconds for confirmation
+  - STEP 13: Check for success message
+
+ANTI-LOOP PROTECTION:
+  If stuck repeating same action 3+ times:
+  ⛔ STOP → ANALYZE → TRY DIFFERENT APPROACH
+  
+  Common issues:
+  - Button not working? → Check for error messages first
+  - Email not arriving? → Wait up to 60s total, check spam
+  - Wrong email domain? → Report error, don't retry blindly
+  
+  ❌ NEVER:
+    - Click same button 3+ times
+    - Fill field twice if already filled successfully
+    - Wait indefinitely (max 60s per wait)
+
+OUTPUT FORMAT (MANDATORY):
   {{
     "status": "success|partial|failed",
-    "email": "<the-temp-email-you-used>",
+    "email": "{email}",
     "confirmed": true|false,
-    "notes": "Brief explanation of what happened"
+    "notes": "Brief explanation"
   }}
-  
-  Examples:
-  - Full success: {{"status":"success","email":"user123@gamegta.com","confirmed":true,"notes":"Account created and verified"}}
-  - Partial success: {{"status":"partial","email":"user456@tempmail.com","confirmed":false,"notes":"Account created but email not yet confirmed"}}
-  - Failure: {{"status":"failed","email":"user789@mail.tm","confirmed":false,"notes":"Email domain blocked by Airtable"}}
 
+REMEMBER: Use EXACT email {email} - do not modify or invent new one!
 """
 
     async def run_agent_with_timeout(self, agent: Agent, timeout: int) -> Any:
         return await asyncio.wait_for(agent.run(), timeout=timeout)
 
-    async def run(self):
-        print("\n🚀 Запуск регистрации: агент управляет двумя браузерами")
+    async def run_step1_get_email(self) -> Tuple[bool, Optional[str]]:
+        """ШАГ 1: Получение временного email через агента"""
+        print("\n" + "=" * 60)
+        print("📧 ШАГ 1: ПАРСИНГ EMAIL С TEMP-MAIL.ORG")
         print("=" * 60)
-
+        
         try:
-            self.rate_limited_llm = RateLimitedLLM(self.llm)
-
-            # Создаём агента с доступом к ДВУм браузерам одновременно
-            # Agent в browser-use может работать с несколькими browser_context
-            profile_1 = BrowserProfile(
+            profile = BrowserProfile(
                 keep_alive=True,
-                disable_security=False,  # Оставляем security для надёжности
+                disable_security=False,
             )
             
-            # Начальные действия: автоматически открываем нужные вкладки
-            initial_actions = [
-                {'navigate': {'url': 'https://temp-mail.org/en/', 'new_tab': True}},    # Вкладка 1: temp-mail
-                {'navigate': {'url': self.referral_url, 'new_tab': True}},              # Вкладка 2: Airtable
-            ]
-            
-            # Создаём timestamp для сохранения истории
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            conversation_path = Path(f"logs/airtable_registration_{timestamp}.json")
+            conversation_path = Path(f"logs/step1_email_parser_{timestamp}.json")
             conversation_path.parent.mkdir(exist_ok=True)
+            task_id = f"email_parser_{timestamp}"
             
-            # Генерируем уникальный task_id для трекинга
-            task_id = f"airtable_reg_{timestamp}"
-            
-            print("\n⚙️  Настройки агента:")
+            print(f"\n⚙️  Настройки агента (ШАГ 1):")
             print(f"   📝 Task ID: {task_id}")
-            print(f"   💾 История сохранится в: {conversation_path}")
-            print(f"   🎬 GIF анимация: logs/registration_{timestamp}.gif")
-            print(f"   👁️  Vision API: включен (auto)")
-            print(f"   ⏱️  Таймаут шага: {STEP_TIMEOUT}s")
-            print(f"   🔄 Макс. действий за шаг: 15")
-            print(f"   ❌ Макс. ошибок: 20")
+            print(f"   💾 История: {conversation_path}")
+            print(f"   🎬 GIF: logs/step1_email_{timestamp}.gif")
+            print(f"   🌐 URL: https://temp-mail.org/en/")
             
-            # Основной агент с оптимальными параметрами
             agent = Agent(
-                task=self.build_master_mission(),
+                task=self.build_email_parser_mission(),
                 llm=self.rate_limited_llm,
-                browser_profile=profile_1,
+                browser_profile=profile,
                 
-                # === ОСНОВНЫЕ НАСТРОЙКИ ===
-                use_vision=True,                        # Включаем Vision API для скриншотов
-                max_failures=20,                        # Больше попыток перед сдачей
-                initial_actions=initial_actions,        # Сразу откроет обе вкладки
+                # Основные настройки
+                use_vision=True,
+                max_failures=10,
                 
-                # === СТРУКТУРИРОВАННЫЙ ВЫВОД ===
-                output_model_schema=RegistrationResult, # Схема для валидации результата
+                # Структурированный вывод
+                output_model_schema=EmailParserResult,
                 
-                # === ТАЙМИНГИ ===
-                step_timeout=STEP_TIMEOUT,              # 180 секунд на шаг
-                llm_timeout=60,                         # 60 секунд на LLM запрос
+                # Тайминги
+                step_timeout=120,  # 2 минуты достаточно для получения email
+                llm_timeout=60,
                 
-                # === ОПТИМИЗАЦИЯ РАБОТЫ ===
-                max_actions_per_step=15,                # Больше действий за один шаг
-                use_thinking=True,                      # Включить рассуждения (лучшее качество)
-                flash_mode=False,                       # Не используем быстрый режим
+                # Оптимизация
+                max_actions_per_step=10,
+                use_thinking=True,
+                flash_mode=False,
                 
-                # === ЛОГИРОВАНИЕ И ОТЛАДКА ===
-                save_conversation_path=str(conversation_path),  # Сохранить полную историю
-                generate_gif=f"logs/registration_{timestamp}.gif",  # GIF анимация процесса
-                task_id=task_id,                        # ID для трекинга
-                source="airtable_registration_dual_browser",  # Источник для аналитики
+                # Логирование
+                save_conversation_path=str(conversation_path),
+                generate_gif=f"logs/step1_email_{timestamp}.gif",
+                task_id=task_id,
+                source="email_parser_step1",
                 
-                # === ДОПОЛНИТЕЛЬНЫЕ ФИЧИ ===
-                include_recent_events=True,             # Включить события браузера для контекста
-                calculate_cost=True,                    # Подсчитывать стоимость токенов
-                display_files_in_done_text=True,        # Показывать файлы в done()
-                final_response_after_failure=True,      # Давать финальный ответ даже при провале
-                
-                # === ДЕТАЛИЗАЦИЯ ===
-                vision_detail_level='high',             # Высокая детализация для Vision API
-                include_attributes=['data-testid', 'name', 'id', 'type'],  # Важные HTML атрибуты
+                # Дополнительно
+                include_recent_events=True,
+                calculate_cost=True,
+                display_files_in_done_text=True,
+                final_response_after_failure=True,
+                vision_detail_level='high',
+                include_attributes=['data-testid', 'name', 'id', 'type', 'class'],
             )
             
-            print("\n✅ Вкладки автоматически открыты:")
-            print("   📧 Tab 1: https://temp-mail.org/en/")
-            print(f"   📝 Tab 2: {self.referral_url}")
-            print("   🤖 Агент начинает работу с готовыми вкладками...\n")
+            print("\n🤖 Агент запущен для парсинга email...\n")
+            
+            result = await self.run_agent_with_timeout(agent, timeout=120)
+            
+            # Извлекаем email из результата
+            email = None
+            success = False
+            
+            try:
+                if hasattr(result, 'model_output') and result.model_output:
+                    structured = result.model_output
+                    email = structured.email
+                    success = structured.success
+                    notes = structured.notes
+                    print(f"\n✅ Структурированный результат получен:")
+                    print(f"   📧 Email: {email}")
+                    print(f"   ✓ Success: {success}")
+                    print(f"   📝 Notes: {notes}")
+                else:
+                    # Fallback парсинг
+                    parsed = parse_agent_result(result)
+                    text = parsed.get("done_text") or parsed.get("raw_text") or ""
+                    email = extract_email_from_result(text)
+                    success = bool(email and "@" in email)
+                    print(f"\n⚠️  Fallback парсинг:")
+                    print(f"   📧 Email: {email}")
+                    print(f"   ✓ Success: {success}")
+            except Exception as e:
+                print(f"\n❌ Ошибка извлечения email: {e}")
+            
+            # Закрываем агент
+            await agent.close()
+            
+            if success and email:
+                print("\n" + "=" * 60)
+                print(f"✅ ШАГ 1 ЗАВЕРШЁН УСПЕШНО")
+                print(f"📧 Полученный email: {email}")
+                print("=" * 60)
+                return True, email
+            else:
+                print("\n" + "=" * 60)
+                print(f"❌ ШАГ 1 НЕ УДАЛСЯ")
+                print(f"   Email не получен или невалидный")
+                print("=" * 60)
+                return False, None
+                
+        except Exception as e:
+            print(f"\n❌ Критическая ошибка в ШАГ 1: {e}")
+            return False, None
 
+    async def run_step2_register(self, email: str) -> bool:
+        """ШАГ 2: Регистрация с полученным email"""
+        print("\n" + "=" * 60)
+        print("📝 ШАГ 2: РЕГИСТРАЦИЯ НА AIRTABLE")
+        print("=" * 60)
+        print(f"📧 Используем email: {email}")
+        
+        try:
+            profile = BrowserProfile(
+                keep_alive=True,
+                disable_security=False,
+            )
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            conversation_path = Path(f"logs/step2_registration_{timestamp}.json")
+            conversation_path.parent.mkdir(exist_ok=True)
+            task_id = f"registration_{timestamp}"
+            
+            print(f"\n⚙️  Настройки агента (ШАГ 2):")
+            print(f"   📝 Task ID: {task_id}")
+            print(f"   💾 История: {conversation_path}")
+            print(f"   🎬 GIF: logs/step2_registration_{timestamp}.gif")
+            print(f"   🌐 URL: {self.referral_url}")
+            
+            agent = Agent(
+                task=self.build_registration_mission(email),
+                llm=self.rate_limited_llm,
+                browser_profile=profile,
+                
+                # Основные настройки
+                use_vision=True,
+                max_failures=20,
+                
+                # Структурированный вывод
+                output_model_schema=RegistrationResult,
+                
+                # Тайминги
+                step_timeout=STEP_TIMEOUT,
+                llm_timeout=60,
+                
+                # Оптимизация
+                max_actions_per_step=15,
+                use_thinking=True,
+                flash_mode=False,
+                
+                # Логирование
+                save_conversation_path=str(conversation_path),
+                generate_gif=f"logs/step2_registration_{timestamp}.gif",
+                task_id=task_id,
+                source="registration_step2",
+                
+                # Дополнительно
+                include_recent_events=True,
+                calculate_cost=True,
+                display_files_in_done_text=True,
+                final_response_after_failure=True,
+                vision_detail_level='high',
+                include_attributes=['data-testid', 'name', 'id', 'type', 'class'],
+            )
+            
+            print("\n🤖 Агент запущен для регистрации...\n")
+            
             result = await self.run_agent_with_timeout(agent, timeout=STEP_TIMEOUT)
             parsed = parse_agent_result(result)
             text = (parsed.get("done_text") or parsed.get("raw_text") or "").strip()
-
+            
             print(f"\n📦 Результат агента (усечено): {text[:400]}")
-
-            # Попытка извлечь структурированный результат
+            
+            # Извлекаем структурированный результат
             try:
-                # Если агент вернул структурированный результат (RegistrationResult)
                 if hasattr(result, 'model_output') and result.model_output:
-                    structured_output = result.model_output
-                    self.status = str(structured_output.status).lower()
-                    self.temp_email = structured_output.email
-                    self.confirmed = bool(structured_output.confirmed)
-                    self.notes = str(structured_output.notes)
-                    print("\n✅ Получен структурированный результат от агента")
+                    structured = result.model_output
+                    self.status = str(structured.status).lower()
+                    self.temp_email = structured.email
+                    self.confirmed = bool(structured.confirmed)
+                    self.notes = str(structured.notes)
+                    print("\n✅ Структурированный результат получен")
                 else:
-                    # Fallback: парсим JSON из текста
+                    # Fallback парсинг
                     json_match = re.search(r'\{[\s\S]*\}', text)
                     if json_match:
                         import json
                         data = json.loads(json_match.group(0))
                         self.status = str(data.get("status", "unknown")).lower()
-                        self.temp_email = data.get("email") or extract_email_from_result(text)
+                        self.temp_email = email
                         self.confirmed = bool(data.get("confirmed", False))
                         self.notes = str(data.get("notes", ""))
-                        print("\n⚠️  Структурированный результат извлечён из JSON")
+                        print("\n⚠️  Структурированный результат из JSON")
             except Exception as e:
-                print(f"\n⚠️  Не удалось извлечь структурированный результат: {e}")
-                # Fallback парсинг
-                pass
+                print(f"\n⚠️  Ошибка парсинга результата: {e}")
+                self.temp_email = email
+                self.status = "unknown"
+                
+            # Держим браузер открытым для проверки
+            print(f"\n💤 Браузер останется открытым на 1 час для проверки")
+            print("   Нажмите Ctrl+C для завершения...")
+            await asyncio.sleep(3600)  # 1 час
+            await agent.close()
             
-            # Дополнительный fallback если ничего не нашли
-            if not self.temp_email:
-                self.temp_email = extract_email_from_result(text)
+            return self.status == "success"
             
-            if not self.status or self.status == "unknown":
-                up = text.upper()
-                if "SUCCESS" in up or "VERIFIED" in up:
-                    self.status = "success"
-                    self.confirmed = "VERIFIED" in up or "CONFIRMED" in up
-                elif "PARTIAL" in up:
-                    self.status = "partial"
-                else:
-                    self.status = "failed"
-                self.notes = self.notes or "fallback parse"
+        except Exception as e:
+            print(f"\n❌ Критическая ошибка в ШАГ 2: {e}")
+            return False
 
+    async def run(self):
+        print("\n🚀 Запуск двухэтапной регистрации")
+        print("=" * 60)
+
+        try:
+            self.rate_limited_llm = RateLimitedLLM(self.llm)
+            
+            # ШАГ 1: Получаем email
+            success_step1, email = await self.run_step1_get_email()
+            
+            if not success_step1 or not email:
+                print("\n❌ КРИТИЧЕСКАЯ ОШИБКА: Не удалось получить email")
+                print("   Регистрация невозможна без email")
+                self.status = "failed"
+                self.notes = "Failed to get temporary email"
+                self.save_credentials()
+                return
+            
+            self.temp_email = email
+            
+            # Небольшая пауза между шагами
+            print("\n⏳ Пауза 5 секунд между шагами...")
+            await asyncio.sleep(5)
+            
+            # ШАГ 2: Регистрируемся с полученным email
+            success_step2 = await self.run_step2_register(email)
+            
             print("\n" + "=" * 60)
-            print("✅ Миссия завершена")
+            print("✅ РЕГИСТРАЦИЯ ЗАВЕРШЕНА")
             print("=" * 60)
             print(f"📧 Email: {self.temp_email}")
-            print(f"📊 Статус: {self.status}, confirmed={self.confirmed}")
+            print(f"📊 Статус: {self.status}")
+            print(f"✓ Подтверждено: {self.confirmed}")
             if self.notes:
                 print(f"📝 Notes: {self.notes[:200]}")
             total_llm = getattr(self.rate_limited_llm, "_call_count", "n/a")
             print(f"📈 Всего LLM вызовов: {total_llm}")
-            
-            # Показать стоимость если рассчитывалась
-            if hasattr(result, 'cost_info') and result.cost_info:
-                print(f"💰 Стоимость: {result.cost_info}")
-            
             print("=" * 60)
-
+            
             self.save_credentials()
-
-            # Держим браузер открытым
-            print(f"\n💤 Браузер остается открытым на {BROWSER_KEEP_ALIVE // 3600} часов")
-            print("   Нажмите Ctrl+C для завершения...")
-            await asyncio.sleep(BROWSER_KEEP_ALIVE)
-            await agent.close()
 
         except KeyboardInterrupt:
             print("\n👋 Прервано пользователем")
