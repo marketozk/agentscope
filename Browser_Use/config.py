@@ -5,9 +5,11 @@
 import os
 import time
 import asyncio
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 from browser_use.llm.google import ChatGoogle
+from langchain_openai import ChatOpenAI
 from datetime import datetime, timedelta
 
 # Загружаем переменные окружения
@@ -18,73 +20,92 @@ load_dotenv(dotenv_path=ENV_PATH)
 # ==================== КОНСТАНТЫ МОДЕЛЕЙ ====================
 
 class ModelConfig:
-    """Конфигурация моделей Gemini"""
+    """Конфигурация моделей Gemini из JSON файла"""
     
-    # Все доступные модели
-    MODELS = {
-        "gemini-2.5-flash": {
-            "name": "gemini-2.5-flash",
-            "model_string": "gemini-2.5-flash",
-            "requests_per_minute": 10,
-            "requests_per_day": 1500,
-            "description": "Новейшая 2.5 модель, работает стабильно",
-            "recommended_for": "production, рекомендуется"
-        },
-        "gemini-2.0-flash-exp": {
-            "name": "gemini-2.0-flash-exp",
-            "model_string": "gemini-2.0-flash-exp",
-            "requests_per_minute": 15,
-            "requests_per_day": 1500,
-            "description": "Экспериментальная 2.0 модель",
-            "recommended_for": "тестирование"
-        },
-        "gemini-flash-latest": {
-            "name": "gemini-flash-latest",
-            "model_string": "gemini-flash-latest",
-            "requests_per_minute": 15,
-            "requests_per_day": 1500,
-            "description": "Последняя стабильная версия",
-            "recommended_for": "автообновление"
-        },
-        "gemini-2.5-pro": {
-            "name": "gemini-2.5-pro",
-            "model_string": "gemini-2.5-pro",
-            "requests_per_minute": 5,
-            "requests_per_day": 500,
-            "description": "Продвинутая модель для сложных задач",
-            "recommended_for": "сложные задачи"
-        }
-    }
+    CONFIG_FILE = Path(__file__).parent / "models_config.json"
     
     @classmethod
-    def get_config(cls, model_name: str = "gemini-2.5-flash"):
+    def load_from_json(cls):
+        """Загрузить конфигурацию из JSON файла"""
+        try:
+            with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"❌ Файл {cls.CONFIG_FILE} не найден!\n"
+                "Создайте models_config.json с конфигурацией моделей."
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(f"❌ Ошибка парсинга JSON: {e}")
+    
+    @classmethod
+    def get_enabled_model(cls):
+        """Получить активную модель (с enabled: true)"""
+        config_data = cls.load_from_json()
+        models = config_data.get("models", {})
+        
+        enabled_models = {
+            name: cfg for name, cfg in models.items() 
+            if cfg.get("enabled", False)
+        }
+        
+        if not enabled_models:
+            raise ValueError(
+                "❌ Ни одна модель не активирована!\n"
+                "Установите enabled: true для нужной модели в models_config.json"
+            )
+        
+        if len(enabled_models) > 1:
+            print(f"⚠️  Найдено {len(enabled_models)} активных моделей, используется первая")
+        
+        # Возвращаем первую активную модель
+        model_name = list(enabled_models.keys())[0]
+        model_config = enabled_models[model_name]
+        model_config["name"] = model_name  # Добавляем имя в конфиг
+        
+        return model_config
+    
+    @classmethod
+    def get_config(cls, model_name: str = None):
         """
-        Получить конфигурацию модели по имени
-        
-        Args:
-            model_name: Имя модели из доступных вариантов
-        
-        Returns:
-            dict: Конфигурация модели
+        Получить конфигурацию модели
+        Если model_name не указан, возвращает активную модель
         """
-        if model_name in cls.MODELS:
-            return cls.MODELS[model_name]
+        if model_name is None:
+            return cls.get_enabled_model()
         
-        # Если модель не найдена, возвращаем gemini-2.5-flash по умолчанию
-        print(f"⚠️  Модель '{model_name}' не найдена, используется gemini-2.5-flash")
-        return cls.MODELS["gemini-2.5-flash"]
+        config_data = cls.load_from_json()
+        models = config_data.get("models", {})
+        
+        if model_name in models:
+            config = models[model_name]
+            config["name"] = model_name
+            return config
+        
+        raise ValueError(f"❌ Модель '{model_name}' не найдена в конфиге")
     
     @classmethod
     def list_models(cls):
         """Вывести список всех доступных моделей"""
-        print("\n📋 ДОСТУПНЫЕ МОДЕЛИ GEMINI:")
-        print("="*70)
-        for key, config in cls.MODELS.items():
-            print(f"\n🤖 {key}")
-            print(f"   {config['description']}")
-            print(f"   Rate: {config['requests_per_minute']} запросов/мин, {config['requests_per_day']} запросов/день")
-            print(f"   Для: {config['recommended_for']}")
-        print("="*70)
+        try:
+            config_data = cls.load_from_json()
+            models = config_data.get("models", {})
+            
+            print("\n📋 ДОСТУПНЫЕ МОДЕЛИ GEMINI:")
+            print("="*70)
+            
+            for name, config in models.items():
+                enabled = "✅ АКТИВНА" if config.get("enabled") else "⚪ Выключена"
+                print(f"\n🤖 {name} - {enabled}")
+                print(f"   {config['description']}")
+                print(f"   Rate: {config['requests_per_minute']} запросов/мин, {config['requests_per_day']} запросов/день")
+                print(f"   Для: {config['recommended_for']}")
+            
+            print("="*70)
+            print("\n💡 Совет: Установите 'enabled: true' в models_config.json для нужной модели")
+            
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
 
 
 # ==================== RATE LIMITER ====================
@@ -212,9 +233,8 @@ class AppConfig:
                 "Создайте файл .env на основе .env.example"
             )
         
-        # Выбор модели из переменной окружения
-        model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-        self.model_config = ModelConfig.get_config(model_name)
+        # Выбор активной модели из JSON конфига
+        self.model_config = ModelConfig.get_enabled_model()
         
         # Rate limiter
         self.rate_limiter = RateLimiter(
@@ -231,11 +251,27 @@ class AppConfig:
     
     def get_llm(self):
         """Получить LLM модель"""
-        return ChatGoogle(
-            model=self.model_config["model_string"],
-            temperature=0.2,
-            api_key=self.api_key
-        )
+        provider = self.model_config.get("provider", "google")
+        
+        if provider == "google":
+            return ChatGoogle(
+                model=self.model_config["model_string"],
+                temperature=0.2,
+                api_key=self.api_key
+            )
+        elif provider == "deepseek":
+            deepseek_key = os.getenv("DEEPSEEK_API_KEY")
+            if not deepseek_key:
+                raise ValueError("❌ DEEPSEEK_API_KEY не найден в .env файле!")
+            
+            return ChatOpenAI(
+                model=self.model_config["model_string"],
+                temperature=0.2,
+                api_key=deepseek_key,
+                base_url="https://api.deepseek.com"
+            )
+        else:
+            raise ValueError(f"❌ Неизвестный провайдер: {provider}")
     
     def print_config(self):
         """Вывести текущую конфигурацию"""

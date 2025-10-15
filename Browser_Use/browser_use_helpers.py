@@ -8,9 +8,10 @@ from typing import Optional
 def extract_email_from_result(result) -> Optional[str]:
     """
     Извлекает email адрес из результата browser-use
+    Агент должен сам вернуть чистый email через done(text='email@example.com')
     
     Args:
-        result: Результат выполнения агента (может быть строкой или объектом)
+        result: Результат выполнения агента
         
     Returns:
         Email адрес или None если не найден
@@ -19,28 +20,10 @@ def extract_email_from_result(result) -> Optional[str]:
     result_str = str(result)
     
     # Паттерн для email
-    email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
-    matches = re.findall(email_pattern, result_str)
+    email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+    matches = re.findall(email_pattern, result_str, re.IGNORECASE)
     
-    if not matches:
-        return None
-    
-    # Список служебных префиксов для фильтрации
-    service_prefixes = ['support@', 'admin@', 'info@', 'noreply@', 'no-reply@', 
-                       'help@', 'contact@', 'service@', 'team@']
-    
-    # Фильтруем служебные email
-    valid_emails = []
-    for email in matches:
-        email_lower = email.lower()
-        if not any(email_lower.startswith(prefix) for prefix in service_prefixes):
-            valid_emails.append(email)
-    
-    # Возвращаем первый валидный email
-    if valid_emails:
-        return valid_emails[0]
-    
-    # Если все email служебные, возвращаем первый
+    # Возвращаем первый найденный email
     return matches[0] if matches else None
 
 

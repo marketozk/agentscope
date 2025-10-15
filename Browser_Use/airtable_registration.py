@@ -1,19 +1,28 @@
 """
-Автоматическая регистрация в Airtable через реферальную ссылку
-с использованием временной почты от temp-mail.io
+🧠 Автономная регистрация в Airtable (реферальная ссылка)
+с использованием временной почты temp-mail.org — один Agent сам планирует и выполняет все шаги.
 
-Стратегия: Один Agent + add_new_task() для последовательных шагов
+Что изменилось:
+- ЕДИНЫЙ «Master Mission» промпт: агент сам решает, какие действия делать и когда, в каком порядке.
+- Четкие цели/критерии успеха + подсказки по инструментам (селекторы, ожидания, проверки, ретраи).
+- На выходе агент возвращает JSON-результат: статус, email, флаги подтверждения, заметки.
+
+Основные фазы (внутри одной миссии):
+  A) Открыть реферал Airtable → убедиться, что страница загрузилась.
+  B) Получить временную почту на temp-mail.org (id="mail", дождаться, пока не исчезнет "Loading").
+  C) Регистрация: заполнить форму (точный email, реалистичное имя, сложный пароль, чекбоксы); обработать ошибки.
+  D) Если регистрация успешна → перейти в почту, найти письмо Airtable и нажать кнопку подтверждения.
+  E) Финальная проверка на airtable.com (dashboard/меню) и возврат JSON.
 """
 import asyncio
 import os
-import random
-import string
 import re
 from pathlib import Path
 from browser_use import Agent
 from browser_use.browser.profile import BrowserProfile
 from dotenv import load_dotenv
 from datetime import datetime
+from typing import Any, Optional, Tuple
 
 # Импорт конфигурации с rate limiting
 from config import (
@@ -26,374 +35,324 @@ from config import (
 )
 
 # Импорт вспомогательных функций
-from browser_use_helpers import extract_email_from_result, is_valid_email
+from browser_use_helpers import extract_email_from_result
 
 # Загружаем переменные окружения
 ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
 # Константы таймаутов и повторов
-STEP_TIMEOUT = 120  # Таймаут для одного шага Agent (секунды)
-RETRY_DELAY_SHORT = 3  # Короткая задержка между повторами
-RETRY_DELAY_MEDIUM = 5  # Средняя задержка
-RETRY_DELAY_LONG = 10  # Длинная задержка
-MAX_EMAIL_CHECKS = 12  # Максимум проверок почты (2 минуты)
-MAX_BUTTON_CLICKS = 3  # Максимум кликов по кнопке
+STEP_TIMEOUT = 240  # Таймаут одного запуска Agent.run(), сек (чуть больше для сетевых лагов)
+RETRY_DELAY_SHORT = 3
+RETRY_DELAY_MEDIUM = 5
+RETRY_DELAY_LONG = 10
 BROWSER_KEEP_ALIVE = 86400  # Держать браузер открытым (24 часа)
+
+
+# ==================== ОБЕРТКА ДЛЯ LLM С RATE LIMIT ====================
+
+class RateLimitedLLM:
+    """Обертка вокруг LLM для контроля rate limit на каждый вызов"""
+    
+    def __init__(self, llm):
+        self.llm = llm
+        self._call_count = 0
+    
+    async def ainvoke(self, input: Any, config: Any = None, **kwargs) -> Any:
+        """Обертка вокруг ainvoke с rate limit контролем"""
+        # Ждем если нужно
+        if not await wait_for_rate_limit():
+            raise Exception("Достигнут дневной лимит API")
+        
+        # Регистрируем запрос
+        register_api_request()
+        self._call_count += 1
+        
+        print(f"   🔷 LLM вызов #{self._call_count}")
+        
+        # Делаем реальный вызов с правильными аргументами
+        if config is not None:
+            return await self.llm.ainvoke(input, config, **kwargs)
+        else:
+            return await self.llm.ainvoke(input, **kwargs)
+    
+    def __getattr__(self, name):
+        """Проксируем все остальные атрибуты к оригинальному LLM"""
+        return getattr(self.llm, name)
+
+
+# ==================== УТИЛИТЫ ПАРСИНГА РЕЗУЛЬТАТОВ AGENT ====================
+
+def _extract_text_from_action(action: Any) -> Optional[str]:
+    """Попробовать извлечь основной текст из ActionResult.
+    Приоритет: text -> extracted_content -> output -> None
+    """
+    for attr in ("text", "extracted_content", "output"):
+        try:
+            val = getattr(action, attr, None)
+            if isinstance(val, str) and val.strip():
+                return val
+        except Exception:
+            pass
+    # Иногда текст может быть внутри dict-поля
+    try:
+        if isinstance(action, dict):
+            for key in ("text", "extracted_content", "output"):
+                val = action.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val
+    except Exception:
+        pass
+    return None
+
+
+def parse_agent_result(result: Any) -> dict:
+    """Структурированный парсер результата Agent с безопасным фолбэком.
+    Возвращает словарь:
+    {
+      'is_done': bool|None,
+      'success': bool|None,
+      'error': str|None,
+      'done_text': str|None,  # короткий итоговый текст
+      'raw_text': str         # полный текст (fallback)
+    }
+    """
+    parsed = {
+        "is_done": None,
+        "success": None,
+        "error": None,
+        "done_text": None,
+        "raw_text": str(result) if result is not None else ""
+    }
+
+    try:
+        all_results = getattr(result, "all_results", None)
+        # Если есть список шагов
+        if isinstance(all_results, (list, tuple)) and all_results:
+            # Ищем финализирующее действие
+            final = None
+            for item in reversed(all_results):
+                try:
+                    if getattr(item, "is_done", False):
+                        final = item
+                        break
+                except Exception:
+                    continue
+            if final is None:
+                final = all_results[-1]
+
+            # Заполняем поля
+            try:
+                parsed["is_done"] = getattr(final, "is_done", None)
+            except Exception:
+                pass
+            try:
+                parsed["success"] = getattr(final, "success", None)
+            except Exception:
+                pass
+            try:
+                err = getattr(final, "error", None)
+                parsed["error"] = str(err) if err else None
+            except Exception:
+                pass
+            # основной краткий текст
+            parsed["done_text"] = _extract_text_from_action(final)
+            # если не нашли короткий текст — можно попробовать ещё и из всего результата
+            if not parsed["done_text"]:
+                parsed["done_text"] = _extract_text_from_action(result) or None
+
+    except Exception:
+        # Любая ошибка парсинга — просто используем raw_text
+        pass
+
+    return parsed
 
 
 class AirtableRegistration:
     """
-    Автоматическая регистрация в Airtable через реферальную ссылку
-    с использованием временной почты от temp-mail.io
-    
-    Стратегия: Один Agent для всех шагов (add_new_task) + retry mechanism
+    Полностью автономная регистрация в Airtable: один Agent получает почту (temp-mail.org),
+    регистрируется, подтверждает email и возвращает структурированный результат.
     """
-    
-    def __init__(self, llm, max_retries=5):
+
+    def __init__(self, llm, referral_url: str = "https://airtable.com/invite/r/ovoAP1zR", max_retries: int = 5):
         self.llm = llm
-        self.state = "INIT"
-        self.temp_email = None
-        self.password = None
-        self.full_name = None
+        self.referral_url = referral_url
         self.max_retries = max_retries
-        self.agent = None  # Единый Agent для всех шагов
-        self.browser_profile = BrowserProfile(keep_alive=True)  # Держим браузер открытым!
-        
-    def generate_user_data(self):
-        """Генерация случайных данных пользователя"""
-        # Генерируем имя
-        first_names = ["Alex", "Sam", "Jordan", "Taylor", "Casey", "Morgan", "Riley", "Avery"]
-        last_names = ["Johnson", "Smith", "Brown", "Davis", "Wilson", "Moore", "Taylor", "Anderson"]
-        
-        first_name = random.choice(first_names)
-        last_name = random.choice(last_names)
-        self.full_name = f"{first_name} {last_name}"
-        
-        # Генерируем пароль (безопасный, но запоминаемый)
-        word = random.choice(["Sunny", "Happy", "Lucky", "Bright", "Smart", "Quick", "Fresh", "Cool"])
-        number = random.randint(100, 999)
-        special = random.choice(["!", "@", "#", "$"])
-        self.password = f"{word}{number}{special}"
-        
-        print(f"📝 Сгенерированы данные:")
-        print(f"   Имя: {self.full_name}")
-        print(f"   Пароль: {self.password}")
-    
-    async def get_temp_email(self):
-        """Получение временной почты с temp-mail.io"""
-        print("\n📧 Получаем временную почту...")
-        
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                print(f"   Попытка {attempt}/{self.max_retries}...")
-                
-                task = """
-                Task: Get temporary email address
-                
-                Steps:
-                1. Open NEW tab with Ctrl+T (important: TAB not window)
-                2. Go to https://temp-mail.org/en/
-                3. Wait 5 seconds
-                4. Find the email address on page (looks like: xxxxx@xxxxx.xxx)
-                5. Copy it
-                
-                Return format: Just the email address, nothing else
-                Example: user123@tempmail.com
-                
-                Note: temp-mail.org is more reliable than temp-mail.io
-                """
-                
-                # Добавляем задачу и выполняем с таймаутом
-                self.agent.add_new_task(task)
-                result = await asyncio.wait_for(
-                    self.agent.run(),
-                    timeout=STEP_TIMEOUT
-                )
-                
-                # Извлекаем и валидируем email
-                email = extract_email_from_result(result)
-                
-                if email and is_valid_email(email):
-                    self.temp_email = email
-                    print(f"✅ Получен email: {self.temp_email}")
-                    return True
-                
-                print(f"⚠️  Попытка {attempt} не удалась. Результат: {str(result)[:150]}...")
-                
-            except asyncio.TimeoutError:
-                print(f"⏱️  Попытка {attempt}: таймаут ({STEP_TIMEOUT}с)")
-            except Exception as e:
-                print(f"⚠️  Попытка {attempt}: ошибка - {str(e)[:150]}")
-            
-            # Задержка перед повтором
-            if attempt < self.max_retries:
-                print(f"   ⏳ Ожидание {RETRY_DELAY_SHORT} сек...")
-                await asyncio.sleep(RETRY_DELAY_SHORT)
-        
-        print("❌ Не удалось получить email после всех попыток")
-        return False
-    
-    async def fill_registration_form(self):
-        """Заполнение формы регистрации на Airtable"""
-        print("\n📝 Заполняем форму регистрации...")
-        
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                print(f"   Попытка {attempt}/{self.max_retries}...")
-                
-                task = f"""
-                Task: Fill Airtable registration form carefully
-                
-                Steps:
-                1. Switch to the Airtable tab (first tab)
-                2. Wait 2 seconds
-                3. CLICK on the email input field (first input)
-                4. Clear the field completely
-                5. Type email slowly: {self.temp_email}
-                6. Wait 1 second
-                7. CLICK on the full name input field (second input)
-                8. Clear the field completely
-                9. Type name slowly: {self.full_name}
-                10. Wait 1 second
-                11. CLICK on the password input field (third input)
-                12. Clear the field completely
-                13. Type password slowly: {self.password}
-                14. Wait 2 seconds
-                15. CLICK the "Sign up" or "Create account" button
-                16. Wait 5 seconds for page reaction
-                
-                IMPORTANT: 
-                - Click each field BEFORE typing
-                - Clear field BEFORE entering new data
-                - Type slowly (one field at a time)
-                
-                Return:
-                - "SUCCESS" if form submitted (page changed or confirmation visible)
-                - "ERROR_INVALID_EMAIL" if email validation error
-                - Otherwise: describe what you see
-                """
-                
-                # Выполняем с таймаутом
-                self.agent.add_new_task(task)
-                result = await asyncio.wait_for(
-                    self.agent.run(),
-                    timeout=STEP_TIMEOUT
-                )
-                
-                result_str = str(result).upper()
-                
-                # Проверяем результат
-                if "ERROR_INVALID_EMAIL" in result_str or "INVALID EMAIL" in result_str:
-                    print("⚠️  Ошибка: почта невалидна или уже используется")
-                    print("   🔄 Получаем новую почту...")
-                    
-                    if await self.get_temp_email():
-                        print(f"   ✅ Новая почта: {self.temp_email}")
-                        print("   🔄 Повторяем заполнение формы...")
-                        continue
-                    else:
-                        print("   ❌ Не удалось получить новую почту")
-                        return False
-                
-                elif "SUCCESS" in result_str:
-                    print("✅ Форма успешно отправлена")
-                    return True
-                
-                else:
-                    print(f"⚠️  Неясный результат: {str(result)[:200]}")
-                
-            except asyncio.TimeoutError:
-                print(f"⏱️  Попытка {attempt}: таймаут ({STEP_TIMEOUT}с)")
-            except Exception as e:
-                print(f"⚠️  Попытка {attempt}: ошибка - {str(e)[:150]}")
-            
-            # Задержка перед повтором
-            if attempt < self.max_retries:
-                print(f"   ⏳ Ожидание {RETRY_DELAY_MEDIUM} сек...")
-                await asyncio.sleep(RETRY_DELAY_MEDIUM)
-        
-        print("❌ Не удалось заполнить форму после всех попыток")
-        return False
-    
-    async def wait_for_confirmation_email(self):
-        """Ожидание письма подтверждения на temp-mail"""
-        print("\n⏳ Ожидаем письмо подтверждения...")
-        
-        for attempt in range(1, MAX_EMAIL_CHECKS + 1):
-            print(f"   Проверка {attempt}/{MAX_EMAIL_CHECKS}...")
-            
-            # Retry для каждой проверки почты
-            for retry in range(1, self.max_retries + 1):
-                try:
-                    check_task = """
-                    Switch to temp-mail.io tab.
-                    Refresh the page.
-                    Check for email from Airtable.
-                    
-                    Return:
-                    - "FOUND" if email from Airtable exists
-                    - "NOT_FOUND" if no emails
-                    """
-                    
-                    self.agent.add_new_task(check_task)
-                    result = await asyncio.wait_for(
-                        self.agent.run(),
-                        timeout=STEP_TIMEOUT
-                    )
-                    
-                    result_str = str(result).upper()
-                    if "FOUND" in result_str:
-                        print("✅ Письмо найдено!")
-                        return True
-                    elif "NOT_FOUND" in result_str or "NOT FOUND" in result_str:
-                        break  # Нормально, писем пока нет
-                    else:
-                        # Неясный ответ - retry
-                        print(f"   ⚠️  Retry {retry}: неясный ответ...")
-                        if retry < self.max_retries:
-                            await asyncio.sleep(2)
-                            continue
-                        break
-                        
-                except asyncio.TimeoutError:
-                    print(f"   ⏱️  Retry {retry}: таймаут")
-                    if retry < self.max_retries:
-                        await asyncio.sleep(2)
-                        continue
-                    break
-                except Exception as e:
-                    print(f"   ⚠️  Retry {retry}: ошибка - {str(e)[:100]}")
-                    if retry < self.max_retries:
-                        await asyncio.sleep(2)
-                        continue
-                    break
-            
-            # Ожидание перед следующей проверкой
-            if attempt < MAX_EMAIL_CHECKS:
-                print(f"   📭 Нет писем, ожидание {RETRY_DELAY_LONG} сек...")
-                await asyncio.sleep(RETRY_DELAY_LONG)
-        
-        print(f"❌ Письмо не получено за {MAX_EMAIL_CHECKS * RETRY_DELAY_LONG // 60} минут")
-        return False
-    
-    async def confirm_email(self):
-        """Подтверждение email через ссылку в письме"""
-        print("\n🔗 Подтверждаем email...")
-        
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                print(f"   Попытка {attempt}/{self.max_retries}...")
-                
-                task = """
-                You are on temp-mail.io tab.
-                
-                Steps:
-                1. Open the email from Airtable (click on it)
-                2. Find confirmation button/link (usually "Confirm" or "Verify")
-                3. Click it and wait for confirmation page
-                
-                Return:
-                - "SUCCESS" if confirmed (words like "verified" or "confirmed")
-                - Otherwise: describe what you see
-                """
-                
-                self.agent.add_new_task(task)
-                result = await asyncio.wait_for(
-                    self.agent.run(),
-                    timeout=STEP_TIMEOUT
-                )
-                
-                result_str = str(result).upper()
-                if "SUCCESS" in result_str or "VERIFIED" in result_str or "CONFIRMED" in result_str:
-                    print("✅ Email подтвержден!")
-                    return True
-                
-                print(f"⚠️  Попытка {attempt}: неясный результат - {str(result)[:150]}...")
-                
-            except asyncio.TimeoutError:
-                print(f"⏱️  Попытка {attempt}: таймаут ({STEP_TIMEOUT}с)")
-            except Exception as e:
-                print(f"⚠️  Попытка {attempt}: ошибка - {str(e)[:150]}")
-            
-            # Задержка перед повтором
-            if attempt < self.max_retries:
-                print(f"   ⏳ Ожидание {RETRY_DELAY_MEDIUM} сек...")
-                await asyncio.sleep(RETRY_DELAY_MEDIUM)
-        
-        print("❌ Не удалось подтвердить email после всех попыток")
-        return False
-    
-    async def run(self):
-        """Основной процесс регистрации"""
-        print("\n🚀 Начинаем процесс регистрации в Airtable")
-        print("=" * 50)
-        print(f"⚙️  Настройки: max_retries={self.max_retries}, timeout={STEP_TIMEOUT}с")
-        print("=" * 50)
-        
+        self.state = "INIT"
+        self.temp_email: Optional[str] = None
+        self.status: str = "unknown"
+        self.confirmed: bool = False
+        self.notes: str = ""
+        self.agent: Optional[Agent] = None
+        self.browser_profile = BrowserProfile(keep_alive=True)
+        self.rate_limited_llm: Optional[RateLimitedLLM] = None
+
+    def build_master_mission(self) -> str:
+        """Единый промпт миссии: агент сам планирует и выполняет шаги."""
+        return f"""
+    ROLE: You are an autonomous web agent. Plan your own steps and act to complete the mission.
+    BROWSER: You can open tabs, switch tabs, click, type, wait, run small JS, and use vision.
+
+        MISSION GOAL:
+          Create a new Airtable account using a reliable temporary email from temp-mail.org,
+          then confirm the account via the confirmation email. Finish on Airtable with a verified/logged-in state.
+
+        START HERE:
+          1) Open the referral link in the FIRST tab and wait until fully loaded:
+             {self.referral_url}
+
+       EMAIL ACQUISITION (temp-mail.org):
+        - Open a NEW TAB and navigate to https://temp-mail.org/en/
+        - BEFORE reading email: verify page is fully loaded via JS: document.readyState === 'complete'. If not, wait 3s and check again (max 3 attempts).
+        - Once readyState is 'complete', wait 20 seconds for the email field to resolve from "Loading" to a real email.
+                - STRICT READ-ONLY: do NOT click, focus, type, select, hover, or press any copy buttons near the email field; do NOT use navigator.clipboard; do NOT trigger any UI events on the email widget. Only read values/attributes/text via JS.
+                - Try multiple robust READ-ONLY ways to read the email (pick the first valid result that includes @):
+                    1) JS: document.getElementById('mail')?.value
+                    2) JS query: find any input likely holding email (READ ONLY)
+                        [...document.querySelectorAll('#mail, input[type="email"], input[readonly], input[aria-label*="email" i], input[placeholder*="mail" i]')]
+                           .map(e=>e.value||e.textContent||'').find(v=>v && v.includes('@'))
+                    3) READ ONLY: check elements for attribute data-clipboard-text containing '@' (read attribute only, no clicks)
+                        [...document.querySelectorAll('[data-clipboard-text]')].map(b=>b.getAttribute('data-clipboard-text')).find(v=>v && v.includes('@'))
+                - If the value is still "Loading" or empty after the initial 20s wait → wait 5 more seconds and retry reading; repeat up to 3 times.
+        - Store the email as TEMP_EMAIL. It must include @ and not be "test@example.com".
+                - Stability: avoid full page reloads too frequently; prefer the site’s own refresh control for inbox. Do not reload more than once per 10s.
+                - Before any action, quickly check document.readyState via JS and wait a short moment if it's "loading".
+                - Screenshot caution: during the first 5–8 seconds on temp-mail, avoid any non-essential state captures/screenshots; prefer direct JS reads to minimize overhead.
+                - IMPORTANT: Once you obtain a valid TEMP_EMAIL, keep it. If the page later shows an empty box, DO NOT discard it — reuse the stored TEMP_EMAIL unless the registration rejects it.
+                - Do NOT regenerate a new email unless you detect an explicit rejection/ban/"already used" during registration.
+
+        REGISTRATION ON AIRTABLE:
+          - Switch back to the Airtable tab.
+          - Fill the Email field with EXACTLY TEMP_EMAIL. First clear the field; then type character by character.
+          - Fill Full Name with a realistic two-word name (e.g., Emma Williams). Do NOT use placeholders.
+          - Create a strong password (letters+numbers+special): e.g., MyP@ssw0rd456.
+          - Check all required checkboxes (terms/privacy).
+                    - Click "Create account" (or similarly named primary submit button).
+                    - AFTER CLICK ANTI-LOOP CHECK:
+                        * If the button becomes disabled, shows a spinner, or the page navigates/changes content — DO NOT click it again.
+                        * Confirm state change via URL/title or appearance of new elements (e.g., welcome/onboarding/dashboard).
+                        * If you clicked and nothing changes for ~5-8 seconds, re-evaluate: check for inline errors or progressed state in another area.
+                        * Never click the same submit button more than 2 times without a clear state change.
+          - If you see an email-related error (e.g., domain blocked or already exists), go back to temp-mail tab,
+            generate a NEW email (refresh or reload), verify it's different, and retry the registration with the new email.
+            Limit total email-retry cycles to {self.max_retries}.
+                    - Time cap: spend no more than ~90 seconds on the registration phase. If you observe clear progress (redirect to onboarding/welcome/workspace), stop clicking and proceed to confirmation email step.
+
+        CONFIRMATION EMAIL CHECKPOINT:
+          - Only after successful account creation, go to the temp-mail tab.
+                    - Prefer using the inbox refresh button on the page (not full browser reload); at most once per 10s.
+                    - Wait 3-5 seconds and look for an email from Airtable (sender contains "airtable").
+          - Open the email and click the main confirmation link/button.
+          - Switch to the new tab (Airtable) and verify confirmation (success text, dashboard, or being logged in).
+
+        FINAL VERIFICATION ON AIRTABLE:
+          - Ensure you are on airtable.com (not signup page) and see dashboard/workspace or user menu.
+
+        IMPORTANT EXECUTION NOTES:
+          - Always verify visible text and URL before deciding.
+          - Prefer stable selectors: id, name, placeholder, label text.
+          - For temp-mail, use id=mail; never return the word "Loading" as the email.
+                    - Before submit, verify the Email field equals TEMP_EMAIL (not test@example.com).
+          - Keep a short memory of recent actions. Avoid repeating the exact same click more than 2 times unless URL/title or key DOM changed.
+                    - Use short waits (2-5s) as needed; if no state change is detected — stop repeating and choose a different action.
+          - Timeout hygiene: if a tab/page seems frozen or unresponsive for ~10s, switch to another tab and back, re-check readyState, and continue; avoid infinite reload loops.
+          - If something fails, explain briefly and continue to the next best step.
+
+        OUTPUT FORMAT (MANDATORY):
+          At the very end, call done(text='{{"status":"success|partial|failed","email":"<TEMP_EMAIL>","confirmed":true|false,"notes":"..."}}').
+          - status=success: logged in or verified on Airtable
+          - status=partial: account created but email not confirmed
+          - status=failed: could not create account
+          - email: the TEMP_EMAIL actually used in the form
+          - confirmed: true only if verification succeeded on Airtable site
+          - notes: short reason/explanation
+        """
+
+    def _parse_final_json(self, text: str) -> Tuple[Optional[dict], Optional[str]]:
+        """Пытаемся извлечь JSON-объект из итогового текста агента. Возвращаем (data, raw)."""
+        if not text:
+            return None, None
+        raw = text.strip()
+        # Попробуем найти JSON фигурные скобки
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if not m:
+            return None, raw
+        json_str = m.group(0)
         try:
-            # Генерируем данные пользователя
-            self.generate_user_data()
-            
-            # Шаг 1: Создаём Agent и открываем Airtable
-            print("\n📍 Шаг 1: Открываем Airtable")
-            open_task = "Open https://airtable.com/invite/r/ovoAP1zR and wait for the page to load."
+            import json
+            data = json.loads(json_str)
+            return data, raw
+        except Exception:
+            return None, raw
+
+    async def run_agent_with_rate_limit(self, timeout=STEP_TIMEOUT):
+        return await asyncio.wait_for(self.agent.run(), timeout=timeout)
+
+    async def run(self):
+        print("\n🚀 Запуск автономной регистрации Airtable (единая миссия)")
+        print("=" * 50)
+        print(f"⚙️  Настройки: retries={self.max_retries}, timeout={STEP_TIMEOUT}с")
+        print("=" * 50)
+
+        try:
+            # Оборачиваем LLM для строгого контроля API вызовов
+            self.rate_limited_llm = RateLimitedLLM(self.llm)
+
+            # Создаём Agent с master-миссией
             self.agent = Agent(
-                task=open_task, 
-                llm=self.llm, 
-                browser_profile=self.browser_profile,  # keep_alive=True!
-                use_vision=False,  # Отключаем vision для стабильности
-                max_failures=5  # Увеличиваем tolerance к ValidationError
+                task=self.build_master_mission(),
+                llm=self.rate_limited_llm,
+                browser_profile=self.browser_profile,
+                use_vision=True,
+                max_failures=15,
             )
-            
-            await asyncio.wait_for(
-                self.agent.run(),
-                timeout=STEP_TIMEOUT
-            )
-            self.state = "AIRTABLE_OPENED"
-            print("✅ Airtable открыт")
-            
-            # Шаг 2: Получаем временную почту
-            print("\n📍 Шаг 2: Получаем временную почту")
-            if not await self.get_temp_email():
-                raise Exception("Не удалось получить временную почту")
-            self.state = "EMAIL_OBTAINED"
-            
-            # Шаг 3: Заполняем форму регистрации
-            print("\n📍 Шаг 3: Заполняем форму")
-            if not await self.fill_registration_form():
-                raise Exception("Не удалось заполнить форму регистрации")
-            self.state = "FORM_SUBMITTED"
-            
-            # Шаг 4: Ждем письмо подтверждения
-            print("\n📍 Шаг 4: Ожидаем письмо")
-            if not await self.wait_for_confirmation_email():
-                raise Exception("Не получено письмо подтверждения")
-            self.state = "EMAIL_RECEIVED"
-            
-            # Шаг 5: Подтверждаем email
-            print("\n📍 Шаг 5: Подтверждаем email")
-            if not await self.confirm_email():
-                raise Exception("Не удалось подтвердить email")
-            self.state = "COMPLETED"
-            
-            # Успех!
+
+            # Один запуск – агент внутри сам планирует и действует
+            result = await self.run_agent_with_rate_limit()
+
+            parsed = parse_agent_result(result)
+            main_text = (parsed.get("done_text") or parsed.get("raw_text") or "").strip()
+            print(f"\n📦 Итог от агента (усечено): {main_text[:400]}...")
+
+            # Пытаемся вытащить JSON-результат
+            data, _ = self._parse_final_json(main_text)
+            if data:
+                self.status = str(data.get("status", "unknown")).lower()
+                self.temp_email = data.get("email") or extract_email_from_result(main_text)
+                self.confirmed = bool(data.get("confirmed", False))
+                self.notes = str(data.get("notes", ""))
+            else:
+                # Фолбэк: по ключевым словам
+                up = main_text.upper()
+                self.temp_email = extract_email_from_result(main_text)
+                if "SUCCESS" in up or "LOGGED_IN" in up or "VERIFIED" in up:
+                    self.status = "success"
+                    self.confirmed = True if "VERIFIED" in up else False
+                elif "PARTIAL" in up or "ACCOUNT" in up:
+                    self.status = "partial"
+                else:
+                    self.status = "failed"
+                self.notes = "fallback parse"
+
             print("\n" + "=" * 50)
-            print("✅ УСПЕХ! Регистрация завершена")
+            print("✅ Миссия завершена")
             print("=" * 50)
             print(f"📧 Email: {self.temp_email}")
-            print(f"👤 Имя: {self.full_name}")
-            print(f"🔑 Пароль: {self.password}")
+            print(f"📊 Статус: {self.status}, confirmed={self.confirmed}")
+            if self.notes:
+                print(f"📝 Notes: {self.notes[:200]}")
+            total_llm_calls = getattr(self.rate_limited_llm, "_call_count", "n/a")
+            print(f"📈 Внутренних LLM вызовов: {total_llm_calls}")
             print("=" * 50)
-            
-            # Сохраняем данные
+
+            # Сохраняем результат
             self.save_credentials()
-            
-            # Держим браузер открытым
+
+            # Держим браузер открытым, чтобы можно было глазами проверить финальное состояние
             print(f"\n💤 Браузер остается открытым на {BROWSER_KEEP_ALIVE // 3600} часов")
             print("   Нажмите Ctrl+C для завершения...")
             await asyncio.sleep(BROWSER_KEEP_ALIVE)
-            
+
         except KeyboardInterrupt:
             print("\n👋 Прервано пользователем")
             raise
@@ -401,10 +360,9 @@ class AirtableRegistration:
             print(f"\n⏱️  Таймаут на этапе {self.state}")
             raise
         except Exception as e:
-            print(f"\n❌ Ошибка на этапе {self.state}: {str(e)}")
+            print(f"\n❌ Ошибка на этапе {self.state}: {e}")
             raise
         finally:
-            # Cleanup: закрываем браузер
             if self.agent:
                 print("\n🧹 Закрываем браузер...")
                 try:
@@ -414,16 +372,18 @@ class AirtableRegistration:
                     print(f"⚠️  Ошибка при закрытии браузера: {e}")
     
     def save_credentials(self):
-        """Сохранение учетных данных в файл"""
+        """Сохранение результата в файл"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"airtable_registration_{timestamp}.txt"
         
         with open(filename, 'w', encoding='utf-8') as f:
-            f.write("=== ДАННЫЕ РЕГИСТРАЦИИ AIRTABLE ===\n")
+            f.write("=== РЕЗУЛЬТАТ РЕГИСТРАЦИИ AIRTABLE ===\n")
             f.write(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Email: {self.temp_email}\n")
-            f.write(f"Имя: {self.full_name}\n")
-            f.write(f"Пароль: {self.password}\n")
+            f.write(f"Статус: {self.status}\n")
+            f.write(f"Подтверждено: {self.confirmed}\n")
+            if self.notes:
+                f.write(f"Заметки: {self.notes}\n")
             f.write("=" * 40 + "\n")
         
         print(f"\n💾 Данные сохранены в файл: {filename}")
@@ -441,16 +401,14 @@ async def main():
         print(f"\n❌ Ошибка конфигурации: {e}")
         return
     
-    # Проверка rate limit
-    if not await wait_for_rate_limit():
+    # Проверка дневного лимита (без регистрации запроса здесь)
+    can_run = await wait_for_rate_limit()
+    if not can_run:
         print("⛔ Достигнут лимит API. Попробуйте позже.")
         return
     
-    # Регистрируем запрос API
-    register_api_request()
-    
-    # Запускаем регистрацию с retry механизмом (5 попыток для обработки ошибок валидации)
-    registration = AirtableRegistration(llm, max_retries=5)
+    # Запускаем регистрацию с retry механизмом (100 попыток для обработки ошибок валидации)
+    registration = AirtableRegistration(llm, max_retries=100)
     
     try:
         await registration.run()

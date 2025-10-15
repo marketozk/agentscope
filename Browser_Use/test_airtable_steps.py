@@ -7,7 +7,6 @@ from pathlib import Path
 from browser_use import Agent
 from dotenv import load_dotenv
 from config import get_llm, get_app_config
-from browser_use_helpers import extract_email_from_result, is_valid_email
 
 # Загружаем конфигурацию
 ENV_PATH = Path(__file__).parent / ".env"
@@ -15,18 +14,20 @@ load_dotenv(dotenv_path=ENV_PATH)
 
 
 async def test_temp_mail():
-    """Тест получения временной почты"""
+    """Тест получения временной почты (как в реальном процессе)"""
     print("\n" + "="*60)
-    print("🧪 Тест: Получение временной почты")
+    print("🧪 Тест: Получение временной почты через temp-mail.org")
     print("="*60)
     
     llm = get_llm()
     agent = Agent(
         task="""
-        1. Открой https://temp-mail.io/ru
-        2. Дождись полной загрузки страницы
-        3. Скопируй email адрес который отображается на странице
-        4. Верни только email адрес (формат: xxx@xxx.xxx)
+        Go to https://temp-mail.org/en/
+        Wait 3 seconds for the email address to fully load.
+        Extract the email address from the page.
+        IMPORTANT: When calling done(), return ONLY the email address in format xxxxx@xxxxx.com
+        Example: done(text='abc123@tempmail.com', success=True)
+        DO NOT write descriptions - return ONLY the email address!
         """,
         llm=llm,
         use_vision=True
@@ -34,18 +35,11 @@ async def test_temp_mail():
     
     result = await agent.run()
     
-    # Используем helper для извлечения email
-    email = extract_email_from_result(result)
+    # Агент сам возвращает результат - просто выводим его
+    print(f"\n📧 Результат агента: {result}")
+    print(f"✅ Тест завершен")
     
-    print(f"\n📧 Извлеченный email: {email}")
-    
-    if email and is_valid_email(email):
-        print(f"✅ Email получен успешно: {email}")
-        return email
-    else:
-        print("❌ Ошибка: не удалось получить валидный email")
-        print(f"   Результат: {str(result)[:300]}...")
-        return None
+    return result
 
 
 async def test_airtable_form():
@@ -119,44 +113,45 @@ async def test_form_filling():
 
 
 async def test_email_monitoring():
-    """Тест мониторинга почты (симуляция)"""
+    """Тест проверки почты на temp-mail.org (как в реальном процессе)"""
     print("\n" + "="*60)
-    print("🧪 Тест: Мониторинг temp-mail (симуляция)")
+    print("🧪 Тест: Проверка писем на temp-mail.org")
     print("="*60)
     
     llm = get_llm()
     
-    # Простой тест - просто проверяем, что можем открыть и обновить страницу
+    # Тест проверки почты (реальный процесс из airtable_registration.py)
     task = """
-    1. Открой https://temp-mail.io/ru
-    2. Дождись загрузки страницы
-    3. Проверь, есть ли входящие письма
-    4. Верни статус: "FOUND" если есть письма, иначе "EMPTY"
+    Switch to temp-mail.org tab.
+    Look for confirmation email from Airtable in inbox.
+    If email found: click it, find confirmation link/button, click it.
+    If no email yet: return "NO_EMAIL" (we'll check again).
+    After clicking link: return "EMAIL_CONFIRMED" or describe what happened.
     """
     
-    agent = Agent(task=task, llm=llm)
+    agent = Agent(task=task, llm=llm, use_vision=True)
     result = await agent.run()
     
-    print(f"\n� Результат проверки: {result}")
+    print(f"\n📬 Результат проверки: {result}")
     print("\n✅ Тест завершен!")
 
 
 async def test_full_flow_dry_run():
-    """Полный тест flow без реальной регистрации"""
+    """Полный тест flow - открытие Airtable + получение почты (dry run)"""
     print("\n" + "="*60)
-    print("🧪 Тест: Полный flow (dry run)")
+    print("🧪 Тест: Полный flow (dry run) - как в реальном процессе")
     print("="*60)
     
     llm = get_llm()
     
-    # Объединяем все шаги в одну задачу
+    # Используем реальную последовательность из airtable_registration.py
     task = """
-    1. Открой https://airtable.com/invite/r/ovoAP1zR и дождись загрузки
-    2. Открой новую вкладку и перейди на https://temp-mail.io/ru
-    3. Скопируй email адрес с temp-mail
-    4. Переключись обратно на вкладку с Airtable
-    5. Найди и опиши поля формы (Email address, Full name, Password)
-    6. Верни найденный email и список полей
+    Step 1: Go to https://airtable.com/invite/r/ovoAP1zR and wait for page to load.
+    Step 2: Open new tab and go to https://temp-mail.org/en/ - email appears immediately.
+    Step 3: Find and get the email address from temp-mail page (visible in email field).
+    Step 4: Switch back to Airtable tab and describe the registration form fields.
+    
+    Return: "EMAIL: [email_address] | FORM: [field1, field2, ...]"
     """
     
     agent = Agent(task=task, llm=llm, use_vision=True)

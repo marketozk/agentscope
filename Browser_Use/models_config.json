@@ -1,0 +1,73 @@
+{
+  "models": {
+    "gemini-exp-1206": {
+      "enabled": false,
+      "model_string": "gemini-exp-1206",
+      "requests_per_minute": 15,
+      "requests_per_day": 1500,
+      "description": "Экспериментальная 2.5 Pro (может иметь больше лимитов)",
+      "recommended_for": "эксперименты, обход лимитов"
+    },
+    "gemini-2.0-flash-lite": {
+      "enabled": true,
+      "model_string": "gemini-2.0-flash-lite",
+      "requests_per_minute": 15,
+      "requests_per_day": 500,
+      "description": "Облегчённая версия 2.0 Flash",
+      "recommended_for": "быстрая работа, экономия лимитов"
+    },
+    "gemini-2.5-flash": {
+      "enabled": false,
+      "model_string": "gemini-2.5-flash",
+      "requests_per_minute": 10,
+      "requests_per_day": 250,
+      "description": "Новейшая 2.5 модель, стабильная",
+      "recommended_for": "production"
+    },
+    "gemini-2.0-flash-exp": {
+      "enabled": false,
+      "model_string": "gemini-2.0-flash-exp",
+      "requests_per_minute": 15,
+      "requests_per_day": 250,
+      "description": "Экспериментальная 2.0 модель",
+      "recommended_for": "тестирование, больше req/min"
+    },
+    "gemini-flash-latest": {
+      "enabled": false,
+      "model_string": "gemini-flash-latest",
+      "requests_per_minute": 15,
+      "requests_per_day": 250,
+      "description": "Последняя стабильная версия (автообновление)",
+      "recommended_for": "автообновление до новейшей"
+    },
+    "gemini-2.5-pro": {
+      "enabled": false,
+      "model_string": "gemini-2.5-pro",
+      "requests_per_minute": 5,
+      "requests_per_day": 50,
+      "description": "Продвинутая модель для сложных задач",
+      "recommended_for": "сложные задачи, медленнее"
+    },
+    "deepseek-chat": {
+      "enabled": false,
+      "provider": "deepseek",
+      "model_string": "deepseek-chat",
+      "requests_per_minute": 60,
+      "requests_per_day": 50000,
+      "description": "DeepSeek Chat - быстрая и дешевая модель ($0.14/1M токенов)",
+      "recommended_for": "отладка, разработка, большое количество запросов"
+    },
+    "deepseek-reasoner": {
+      "enabled": false,
+      "provider": "deepseek",
+      "model_string": "deepseek-reasoner",
+      "requests_per_minute": 60,
+      "requests_per_day": 50000,
+      "description": "DeepSeek Reasoner (R1) - модель с рассуждениями ($0.55/1M input, $2.19/1M output)",
+      "recommended_for": "сложные задачи требующие логики"
+    }
+  },
+  "_comment": "Установи enabled: true для модели, которую хочешь использовать. Только одна модель должна быть enabled: true!",
+  "_note_gemini": "gemini-exp-1206 - экспериментальная, может иметь меньше ограничений на free tier",
+  "_note_deepseek": "DeepSeek модели требуют DEEPSEEK_API_KEY в .env файле. $5 бесплатных кредитов = ~30,000-50,000 запросов"
+}
