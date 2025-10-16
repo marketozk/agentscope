@@ -9,7 +9,7 @@
       "recommended_for": "эксперименты, обход лимитов"
     },
     "gemini-2.0-flash-lite": {
-      "enabled": true,
+      "enabled": false,
       "model_string": "gemini-2.0-flash-lite",
       "requests_per_minute": 15,
       "requests_per_day": 500,
@@ -17,7 +17,7 @@
       "recommended_for": "быстрая работа, экономия лимитов"
     },
     "gemini-2.5-flash": {
-      "enabled": false,
+      "enabled": true,
       "model_string": "gemini-2.5-flash",
       "requests_per_minute": 10,
       "requests_per_day": 250,
