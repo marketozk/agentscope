@@ -507,6 +507,7 @@ REMEMBER:
 """
 
     async def run_agent_with_timeout(self, agent: Agent, timeout: int) -> Any:
+        """Запуск агента с таймаутом"""
         return await asyncio.wait_for(agent.run(), timeout=timeout)
 
     async def run_step1_get_email(self) -> Tuple[bool, Optional[str]]:
@@ -551,7 +552,7 @@ REMEMBER:
                 
                 # Оптимизация
                 max_actions_per_step=10,
-                use_thinking=True,
+                use_thinking=False,  # Отключено: модель иногда только думает без действия
                 flash_mode=False,
                 
                 # Логирование
@@ -679,7 +680,7 @@ REMEMBER:
                 
                 # Оптимизация
                 max_actions_per_step=15,
-                use_thinking=True,
+                use_thinking=False,  # Отключено: модель иногда только думает без действия
                 flash_mode=False,
                 
                 # Логирование
