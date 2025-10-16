@@ -221,7 +221,7 @@ IMPORTANT:
     def build_registration_mission(self, email: str) -> str:
         """ШАГ 2: Миссия для регистрации с полученным email"""
         return f"""
-MISSION: Register on Airtable using provided email
+MISSION: Register on Airtable using provided email and confirm account
 
 YOUR EMAIL: {email}
 REGISTRATION URL: {self.referral_url}
@@ -233,7 +233,9 @@ CRITICAL WORKFLOW:
   📝 PHASE 1: REGISTER ON AIRTABLE
   -------------------------------------------
   - STEP 1: Navigate to {self.referral_url}
+  
   - STEP 2: WAIT 5 seconds for form to load
+  
   - STEP 3: Fill registration form:
     * Email: {email} (EXACTLY this email, DO NOT MODIFY!)
     * Full Name: Generate realistic name (e.g., "Sarah Mitchell")
@@ -245,45 +247,117 @@ CRITICAL WORKFLOW:
     * Name and password filled
     * Checkboxes checked
   
-  - STEP 5: Click "Create account" ONCE
-  - STEP 6: WAIT 10 seconds and check result:
-    * Success: URL changed to dashboard/verification page
-    * Loading: Wait 10 more seconds
-    * Error: Read message and report
+  - STEP 5: Click "Create account" button ONCE (only once!)
+  
+  - STEP 6: ⚠️ CRITICAL - After clicking "Create account", you MUST:
+    1. **WAIT 10 seconds** for page to react
+    2. **CHECK current URL** - did it change?
+       ✓ If URL contains "/workspace" or "/verify" → Registration SUCCESS, proceed to STEP 7
+       ✓ If URL contains "email" or "confirm" → Check page for instructions
+       ✗ If URL is still /invite/... → Check for error messages on page
+    3. **READ page content** - what does it say?
+       ✓ "Check your email" or "Verify your email" → SUCCESS, proceed to STEP 7
+       ✓ "Welcome" or dashboard elements → SUCCESS, proceed to STEP 7
+       ✗ Error message visible → READ IT, report in output, set status=failed
+       ⏳ Page is loading/empty → WAIT 10 MORE seconds, then re-check
+    4. **DECISION**:
+       - If registration succeeded (URL changed OR success message) → Continue to PHASE 2
+       - If error occurred → STOP, report error in output
+       - If unclear after 20s wait → Take screenshot, analyze, decide
 
-  ✉️ PHASE 2: CONFIRM EMAIL
+  ✉️ PHASE 2: CONFIRM EMAIL VIA TEMP-MAIL
   -------------------------------------------
   - STEP 7: Open NEW TAB with https://temp-mail.org/en/
-  - STEP 8: WAIT 30 seconds for confirmation email from Airtable
-  - STEP 9: Look for email with "verify" or "confirm" in subject
-  - STEP 10: Open that email
-  - STEP 11: Click the confirmation/verification link
-  - STEP 12: WAIT 5 seconds for confirmation
-  - STEP 13: Check for success message
+    * DO NOT close the Airtable tab!
+    * Keep Airtable tab open in background
+  
+  - STEP 8: WAIT 30 seconds for confirmation email from Airtable to arrive
+    * Look for new email in inbox
+    * Email subject will contain "verify", "confirm", or "Airtable"
+  
+  - STEP 9: Find and OPEN the email from Airtable
+    * Click on the email to view its content
+    * DO NOT click links yet - just open to read
+  
+  - STEP 10: LOCATE the confirmation/verification link in the email
+    * Look for button with "Verify", "Confirm", or similar text
+    * Or find URL link that looks like verification link
+  
+  - STEP 11: COPY the verification link URL
+    * Extract the full URL from the link/button
+    * It should look like: https://airtable.com/verify/...
+  
+  - STEP 12: SWITCH back to Airtable tab (the one from STEP 1)
+    * DO NOT open new tab for verification
+    * Use the SAME tab where you registered
+  
+  - STEP 13: NAVIGATE to the verification link in Airtable tab
+    * Paste/navigate to the URL you copied from email
+    * This confirms email in the same browser session
+  
+  - STEP 14: WAIT 5 seconds for confirmation to process
+  
+  - STEP 15: CHECK if account is now verified
+    * Look for "Email verified" or "Account confirmed" message
+    * Or check if you're redirected to workspace/dashboard
 
 ANTI-LOOP PROTECTION:
-  If stuck repeating same action 3+ times:
-  ⛔ STOP → ANALYZE → TRY DIFFERENT APPROACH
+  ⛔ If you repeat the same action 3+ times:
+    STOP → ANALYZE current state → TRY DIFFERENT APPROACH
   
-  Common issues:
-  - Button not working? → Check for error messages first
-  - Email not arriving? → Wait up to 60s total, check spam
-  - Wrong email domain? → Report error, don't retry blindly
+  Common issues & solutions:
+  - ❌ Button not working after 2 clicks? 
+    → Check for inline error messages FIRST
+    → Don't keep clicking - READ the error
   
-  ❌ NEVER:
-    - Click same button 3+ times
-    - Fill field twice if already filled successfully
-    - Wait indefinitely (max 60s per wait)
+  - ❌ Email not arriving after 30s?
+    → WAIT up to 60s total (emails can be slow)
+    → Check ALL emails in temp-mail inbox
+    → Refresh temp-mail page if needed
+  
+  - ❌ Can't find verification link in email?
+    → Use vision API to READ email content
+    → Look for ANY clickable link
+    → Extract URL manually if needed
+  
+  - ❌ Registration seemed to succeed but no email?
+    → Check Airtable tab - maybe already verified?
+    → Wait longer (up to 90s total for email)
+  
+  NEVER:
+    - Click same button more than 2 times
+    - Fill same field twice if already filled
+    - Wait indefinitely (max 90s for email arrival)
+    - Open verification link in NEW tab (use existing Airtable tab!)
+
+SUCCESS INDICATORS:
+  ✅ Registration successful if:
+    - URL changed from /invite/... to something else
+    - OR page shows "check your email" message
+    - OR page shows dashboard/workspace
+  
+  ✅ Email confirmed if:
+    - After clicking verification link, page shows success
+    - OR redirected to workspace/dashboard
+    - OR message says "email verified"
 
 OUTPUT FORMAT (MANDATORY):
   {{
     "status": "success|partial|failed",
     "email": "{email}",
     "confirmed": true|false,
-    "notes": "Brief explanation"
+    "notes": "Brief explanation of what happened"
   }}
 
-REMEMBER: Use EXACT email {email} - do not modify or invent new one!
+  Status meanings:
+  - "success" = Account created AND email confirmed
+  - "partial" = Account created but email NOT confirmed yet
+  - "failed" = Registration failed (error occurred)
+
+REMEMBER: 
+  - Use EXACT email {email}
+  - Open verification link in SAME tab as registration (not new tab)
+  - After clicking "Create account", MUST wait and analyze result before proceeding
 """
 
     async def run_agent_with_timeout(self, agent: Agent, timeout: int) -> Any:
