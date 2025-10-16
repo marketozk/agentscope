@@ -198,8 +198,9 @@ STEP-BY-STEP WORKFLOW:
   3. Extract email using one of these methods:
      METHOD A (Recommended): JavaScript evaluation
        ```
-       document.querySelector('#mail').textContent
+       document.querySelector('#mail').value
        ```
+       ⚠️ Use .value (not .textContent) to get input field value!
      
      METHOD B: Find textbox element and read its value
        - Look for textbox near "Your Temporary Email Address" heading
@@ -207,10 +208,13 @@ STEP-BY-STEP WORKFLOW:
   
   4. VALIDATE extracted email:
      - Must contain @ symbol
-     - Must have domain (e.g., @fogdiver.com, @mailto.plus)
+     - Must have domain (e.g., @fogdiver.com, @mailto.plus, @elygifts.com)
      - Format: xxxxx@domain.com
   
-  5. RETURN the email in structured format
+  5. ⚠️ IMMEDIATELY RETURN result after successful extraction:
+     - AS SOON AS you get valid email → STOP and RETURN result
+     - DO NOT do any other actions after getting email
+     - Use the exact JSON format specified below
 
 ANTI-LOOP RULES:
   - If email shows "Loading..." → WAIT 5 more seconds
@@ -535,7 +539,8 @@ REMEMBER:
                 
                 # Основные настройки
                 use_vision=True,
-                max_failures=10,
+                max_failures=5,  # Достаточно для email парсинга
+                max_steps=15,  # Ограничиваем количество шагов
                 
                 # Структурированный вывод
                 output_model_schema=EmailParserResult,
@@ -571,6 +576,7 @@ REMEMBER:
             # Извлекаем email из результата
             email = None
             success = False
+            notes = ""
             
             try:
                 if hasattr(result, 'model_output') and result.model_output:
@@ -582,17 +588,34 @@ REMEMBER:
                     print(f"   📧 Email: {email}")
                     print(f"   ✓ Success: {success}")
                     print(f"   📝 Notes: {notes}")
-                else:
-                    # Fallback парсинг
+                elif hasattr(result, 'history') and result.history:
+                    # Попробуем извлечь email из истории шагов
+                    print(f"\n⚠️  Структурированный вывод отсутствует, ищем в истории...")
+                    for step in reversed(result.history):
+                        if hasattr(step, 'result') and step.result:
+                            step_text = str(step.result)
+                            found_email = extract_email_from_result(step_text)
+                            if found_email and "@" in found_email:
+                                email = found_email
+                                success = True
+                                notes = "Email извлечён из истории шагов агента"
+                                print(f"   📧 Найден email в истории: {email}")
+                                break
+                
+                if not email:
+                    # Fallback парсинг из текста результата
                     parsed = parse_agent_result(result)
                     text = parsed.get("done_text") or parsed.get("raw_text") or ""
                     email = extract_email_from_result(text)
                     success = bool(email and "@" in email)
-                    print(f"\n⚠️  Fallback парсинг:")
+                    notes = "Email извлечён через fallback парсинг"
+                    print(f"\n⚠️  Fallback парсинг текста:")
                     print(f"   📧 Email: {email}")
                     print(f"   ✓ Success: {success}")
             except Exception as e:
                 print(f"\n❌ Ошибка извлечения email: {e}")
+                import traceback
+                traceback.print_exc()
             
             # Закрываем агент
             await agent.close()
