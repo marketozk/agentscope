@@ -239,7 +239,7 @@ IMPORTANT:
 
     def build_registration_mission(self, email: str) -> str:
         """ШАГ 2: Миссия для регистрации с полученным email"""
-        return f"""
+        return rf"""
 MISSION: Register on Airtable and confirm email
 
 YOUR EMAIL: {email}
@@ -248,10 +248,29 @@ REGISTRATION URL: {self.referral_url}
 YOUR TASK:
   Complete full Airtable registration using the email above, including email verification.
 
+⚠️ BROWSER TABS STRUCTURE - CRITICAL!
+  You will work with EXACTLY 2 tabs during this mission:
+  
+  📑 TAB #1: temp-mail.org (ALREADY OPEN from previous step)
+    - This tab was opened by the previous agent to get the email
+    - DO NOT CLOSE this tab!
+    - DO NOT OPEN A NEW temp-mail tab!
+    - Confirmation email will arrive in THIS tab
+  
+  📑 TAB #2: Airtable registration (YOU WILL OPEN in STEP 1)
+    - You will open this tab to register
+    - Keep it open for email verification
+    - Use it to confirm email in final step
+  
+  ⛔ NEVER OPEN MORE THAN 2 TABS!
+  ⛔ NEVER OPEN NEW temp-mail TAB - use existing one!
+
 CRITICAL WORKFLOW:
   📝 PHASE 1: AIRTABLE REGISTRATION FORM
   -------------------------------------------
-  - STEP 1: Navigate to {self.referral_url}
+  - STEP 1: Open NEW TAB and navigate to {self.referral_url}
+    * This creates TAB #2 (Airtable)
+    * Keep TAB #1 (temp-mail) in background
   
   - STEP 2: WAIT 5 seconds for form to load
   
@@ -358,9 +377,7 @@ OUTPUT FORMAT (MANDATORY):
     "email_verified": true|false,
     "notes": "Brief summary of what happened"
   }}}}
-"""
 
-  
   - STEP 6: ⚠️ CRITICAL - After clicking "Create account", you MUST:
     1. **WAIT 10 seconds** for page to react
     2. **CHECK current URL** - did it change?
@@ -379,33 +396,39 @@ OUTPUT FORMAT (MANDATORY):
 
   ✉️ PHASE 2: CONFIRM EMAIL VIA TEMP-MAIL
   -------------------------------------------
-  - STEP 7: Open NEW TAB with https://temp-mail.org/en/
-    * DO NOT close the Airtable tab!
-    * Keep Airtable tab open in background
+  - STEP 7: ⚠️ SWITCH to the FIRST browser tab (temp-mail.org)
+    * ❌ DO NOT OPEN NEW TAB - temp-mail is already open in first tab!
+    * You opened temp-mail in the beginning to get email
+    * That same tab now contains the confirmation email from Airtable
+    * DO NOT close the Airtable tab - keep it in background
   
-  - STEP 8: WAIT 30 seconds for confirmation email from Airtable to arrive
-    * Look for new email in inbox
-    * Email subject will contain "verify", "confirm", or "Airtable"
+  - STEP 8: REFRESH the temp-mail page OR wait 30 seconds for email to appear
+    * Look for NEW email from Airtable in the inbox
+    * Email subject will be: "Please confirm your email address"
+    * Sender: "no-reply@airtable.com" or similar
   
-  - STEP 9: Find and OPEN the email from Airtable
-    * Click on the email to view its content
-    * DO NOT click links yet - just open to read
+  - STEP 9: Find and CLICK ON the email from Airtable to open it
+    * Click on the email row to view its full content
+    * DO NOT click any links yet - just open to read the email body
   
   - STEP 10: LOCATE the confirmation/verification link in the email
-    * Look for button with "Verify", "Confirm", or similar text
-    * Or find URL link that looks like verification link
+    * Look for button with "Verify Email", "Confirm your email", or similar text
+    * Or find a clickable URL link in the email body
+    * Expected link format: https://airtable.com/verify/... or similar
   
-  - STEP 11: COPY the verification link URL
+  - STEP 11: COPY the verification link URL (or remember it)
     * Extract the full URL from the link/button
-    * It should look like: https://airtable.com/verify/...
+    * Alternative: You can click the link directly (it will open in same tab or new tab)
   
-  - STEP 12: SWITCH back to Airtable tab (the one from STEP 1)
-    * DO NOT open new tab for verification
-    * Use the SAME tab where you registered
+  - STEP 12: ⚠️ SWITCH to the Airtable tab (SECOND tab, where you registered)
+    * You have 2 tabs: [1] temp-mail, [2] Airtable
+    * Switch to tab #2 (Airtable registration tab)
+    * DO NOT open a third new tab - use existing tab #2!
   
-  - STEP 13: NAVIGATE to the verification link in Airtable tab
-    * Paste/navigate to the URL you copied from email
-    * This confirms email in the same browser session
+  - STEP 13: NAVIGATE to the verification link in the Airtable tab
+    * If you clicked link in email and it opened in new tab → close it, use tab #2 instead
+    * Paste the verification URL into tab #2 (Airtable tab)
+    * This confirms email in the same browser session where you registered
   
   - STEP 14: WAIT 5 seconds for confirmation to process
   
@@ -424,8 +447,9 @@ ANTI-LOOP PROTECTION:
   
   - ❌ Email not arriving after 30s?
     → WAIT up to 60s total (emails can be slow)
-    → Check ALL emails in temp-mail inbox
+    → Check ALL emails in temp-mail inbox (in FIRST tab!)
     → Refresh temp-mail page if needed
+    → ⚠️ DO NOT open new temp-mail tab - use the first one!
   
   - ❌ Can't find verification link in email?
     → Use vision API to READ email content
@@ -436,11 +460,17 @@ ANTI-LOOP PROTECTION:
     → Check Airtable tab - maybe already verified?
     → Wait longer (up to 90s total for email)
   
+  - ❌ Opened temp-mail in new tab and email is not there?
+    → WRONG! You should use the FIRST tab where temp-mail was opened initially
+    → Close the new tab and switch to the original temp-mail tab
+    → The email is in the FIRST temp-mail tab, not in a new one!
+  
   NEVER:
     - Click same button more than 2 times
     - Fill same field twice if already filled
     - Wait indefinitely (max 90s for email arrival)
     - Open verification link in NEW tab (use existing Airtable tab!)
+    - Open NEW temp-mail tab (use the first one from beginning!)
 
 SUCCESS INDICATORS:
   ✅ Registration successful if:
