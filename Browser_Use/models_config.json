@@ -17,7 +17,7 @@
       "recommended_for": "быстрая работа, экономия лимитов"
     },
     "gemini-2.5-flash": {
-      "enabled": true,
+      "enabled": false,
       "model_string": "gemini-2.5-flash",
       "requests_per_minute": 10,
       "requests_per_day": 250,
@@ -48,6 +48,14 @@
       "description": "Продвинутая модель для сложных задач",
       "recommended_for": "сложные задачи, медленнее"
     },
+    "gemini-2.5-computer-use": {
+      "enabled": true,
+      "model_string": "gemini-2.5-computer-use-preview-10-2025",
+      "requests_per_minute": 10,
+      "requests_per_day": 250,
+      "description": "🔥 НОВАЯ! Gemini 2.5 Computer Use - специально для browser automation. Нативная поддержка выполнения действий в браузере",
+      "recommended_for": "browser automation, самая мощная для браузера, требует доступа к preview API"
+    },
     "deepseek-chat": {
       "enabled": false,
       "provider": "deepseek",
@@ -68,6 +76,6 @@
     }
   },
   "_comment": "Установи enabled: true для модели, которую хочешь использовать. Только одна модель должна быть enabled: true!",
-  "_note_gemini": "gemini-exp-1206 - экспериментальная, может иметь меньше ограничений на free tier",
+  "_note_gemini": "gemini-exp-1206 - экспериментальная, может иметь меньше ограничений. gemini-2.5-computer-use - НОВАЯ! Лучшая для browser automation, но требует доступа к preview API",
   "_note_deepseek": "DeepSeek модели требуют DEEPSEEK_API_KEY в .env файле. $5 бесплатных кредитов = ~30,000-50,000 запросов"
 }
