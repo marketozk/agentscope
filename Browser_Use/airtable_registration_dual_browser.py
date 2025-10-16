@@ -183,71 +183,183 @@ class DualBrowserRegistration:
     def build_email_parser_mission(self) -> str:
         """ШАГ 1: Миссия для парсинга email с temp-mail.org"""
         return """
-MISSION: Get temporary email from temp-mail.org
+MISSION: Extract temporary email address from temp-mail.org
 
 YOUR TASK:
-  You need to extract a temporary email address from https://temp-mail.org/en/
+  Get a temporary email address from https://temp-mail.org/en/ that will be used for Airtable registration.
 
-CRITICAL STEPS:
-  1. WAIT 20 seconds after page loads (email needs time to generate)
-  2. LOCATE the email address on the page using one of these methods:
-     - Method A: Extract text from the main email display area
-     - Method B: Use JavaScript: document.querySelector('#mail').textContent
-     - Method C: Use vision API to read email from screenshot
-     - Method D: Look for any visible text matching email pattern (xxx@yyy.zzz)
+STEP-BY-STEP WORKFLOW:
+  1. Navigate to https://temp-mail.org/en/
   
-  3. VERIFY you found a valid email (must contain @ and domain)
-  4. RETURN the email in structured format
+  2. ⚠️ CRITICAL: WAIT 10 seconds after page loads
+     - The email does NOT appear immediately!
+     - Textbox shows "Loading..." at first, then email appears
+  
+  3. Extract email using one of these methods:
+     METHOD A (Recommended): JavaScript evaluation
+       ```
+       document.querySelector('#mail').textContent
+       ```
+     
+     METHOD B: Find textbox element and read its value
+       - Look for textbox near "Your Temporary Email Address" heading
+       - Element ID is usually #mail or similar
+  
+  4. VALIDATE extracted email:
+     - Must contain @ symbol
+     - Must have domain (e.g., @fogdiver.com, @mailto.plus)
+     - Format: xxxxx@domain.com
+  
+  5. RETURN the email in structured format
 
 ANTI-LOOP RULES:
-  - If email not visible after 20s → Refresh page ONCE
-  - If still not visible → Try different selector or JavaScript
+  - If email shows "Loading..." → WAIT 5 more seconds
+  - If email not visible after 15s → Refresh page ONCE
+  - If still not visible after refresh → Try JavaScript method
   - Maximum 3 attempts total
   - DO NOT click random elements hoping to find email
+
+SUCCESS CHECK:
+  ✅ Email extracted = Contains @ and domain name
+  ❌ Failed = Still shows "Loading..." or empty after 20s
 
 OUTPUT FORMAT (MANDATORY):
   {
     "email": "the-extracted-email@domain.com",
     "success": true,
-    "notes": "Email successfully extracted using method X"
+    "notes": "Email successfully extracted after 10s wait"
   }
 
 IMPORTANT:
   - Email MUST be valid format (xxx@domain.com)
   - DO NOT invent or guess email
   - If you can't find email after 3 attempts, set success=false
+  - Typical domains: @fogdiver.com, @mailto.plus, @guerrillamail.com
 """
 
     def build_registration_mission(self, email: str) -> str:
         """ШАГ 2: Миссия для регистрации с полученным email"""
         return f"""
-MISSION: Register on Airtable using provided email and confirm account
+MISSION: Register on Airtable and confirm email
 
 YOUR EMAIL: {email}
 REGISTRATION URL: {self.referral_url}
 
 YOUR TASK:
-  Register a new Airtable account using the email above and confirm via email.
+  Complete full Airtable registration using the email above, including email verification.
 
 CRITICAL WORKFLOW:
-  📝 PHASE 1: REGISTER ON AIRTABLE
+  📝 PHASE 1: AIRTABLE REGISTRATION FORM
   -------------------------------------------
   - STEP 1: Navigate to {self.referral_url}
   
   - STEP 2: WAIT 5 seconds for form to load
   
-  - STEP 3: Fill registration form:
+  - STEP 3: Fill registration form with these EXACT details:
     * Email: {email} (EXACTLY this email, DO NOT MODIFY!)
-    * Full Name: Generate realistic name (e.g., "Sarah Mitchell")
-    * Password: Generate strong password (e.g., "SecureP@ss2024!")
-    * Checkboxes: Check all required (Terms, Privacy Policy)
+    * Full Name: "Maria Rodriguez" (or any realistic name)
+    * Password: "SecurePass2024!" (minimum 8 characters)
+    
+    IMPORTANT NOTES:
+    - Submit button "Create account" is DISABLED initially
+    - It only enables when ALL fields are valid
+    - If button stays disabled → check email format is correct
   
-  - STEP 4: VERIFY before submitting:
-    * Email field = {email}
-    * Name and password filled
-    * Checkboxes checked
+  - STEP 4: Click "Create account" button ONCE (only one click!)
   
-  - STEP 5: Click "Create account" button ONCE (only once!)
+  - STEP 5: ⚠️ CRITICAL - After clicking submit, you MUST:
+    1. **WAIT 10 seconds** for page to process
+    2. **CHECK current URL** - THIS IS THE SUCCESS INDICATOR!
+       ✅ SUCCESS = URL changed from "/invite/r/..." to "https://airtable.com/" (base domain)
+       ✅ SUCCESS = URL contains "/workspace" or "/verify"
+       ❌ FAIL = URL still contains "/invite/"
+    3. **IF URL DID NOT CHANGE**:
+       - Check page for error messages
+       - Read what the error says
+       - Report error and STOP
+    4. **IF URL CHANGED TO https://airtable.com/**:
+       - Registration is SUCCESSFUL!
+       - Proceed immediately to PHASE 2
+
+  ✉️ PHASE 2: EMAIL VERIFICATION
+  -------------------------------------------
+  - STEP 6: Return to https://temp-mail.org/en/ (same tab or new tab)
+    * This is where you got the email in Step 1
+  
+  - STEP 7: WAIT 10 seconds for email to arrive
+    * Airtable sends confirmation email within ~10 seconds
+    * Email subject: "Please confirm your email"
+    * Sender: Airtable <noreply@airtable.com>
+  
+  - STEP 8: Refresh temp-mail page if needed
+    * If inbox still shows "Your inbox is empty"
+    * Click Refresh button or reload page
+  
+  - STEP 9: Find and OPEN the Airtable email
+    * Click on subject link "Please confirm your email"
+    * Email opens in view like: /en/view/{{emailId}}
+  
+  - STEP 10: Extract verification URL from email
+    * Look for button "Confirm my account"
+    * Or find text paragraph with URL
+    * URL pattern: https://airtable.com/auth/verifyEmail/{{userId}}/{{token}}
+  
+  - STEP 11: ⚠️ CRITICAL - Navigate to verification URL
+    * Open the URL IN THE SAME TAB/WINDOW (not new tab!)
+    * Simply navigate/goto the verification URL
+    * DO NOT click it with target="_blank"
+  
+  - STEP 12: WAIT 5 seconds for verification to process
+  
+  - STEP 13: CHECK verification success
+    * Look for success message or redirect to workspace
+    * Account should now be confirmed
+
+ANTI-LOOP PROTECTION:
+  ⛔ If you repeat the same action 3+ times → STOP and analyze
+  
+  Common issues & solutions:
+  - ❌ Submit button disabled? 
+    → Check all fields are filled correctly
+    → Email must be valid format
+  
+  - ❌ URL not changing after submit?
+    → WAIT full 10 seconds before checking
+    → Look for error messages on page
+  
+  - ❌ Email not arriving?
+    → WAIT up to 20 seconds total
+    → Refresh temp-mail inbox
+    → Check spam/all folders
+  
+  - ❌ Can't find verification link?
+    → Look for "Confirm my account" button
+    → Or extract URL from paragraph text
+    → URL always starts with https://airtable.com/auth/verifyEmail/
+  
+  NEVER:
+    - Click "Create account" more than once
+    - Check URL before waiting 10 seconds
+    - Open verification link in new tab
+    - Wait indefinitely (max 30s for email)
+
+SUCCESS INDICATORS:
+  ✅ Registration successful:
+    - URL changes from "/invite/r/xxx" to "https://airtable.com/"
+  
+  ✅ Email verification successful:
+    - After opening verify URL, page shows success or workspace
+
+OUTPUT FORMAT (MANDATORY):
+  {{{{
+    "status": "success|partial|failed",
+    "email": "{email}",
+    "registration_completed": true|false,
+    "email_verified": true|false,
+    "notes": "Brief summary of what happened"
+  }}}}
+"""
+
   
   - STEP 6: ⚠️ CRITICAL - After clicking "Create account", you MUST:
     1. **WAIT 10 seconds** for page to react
