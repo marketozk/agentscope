@@ -532,8 +532,16 @@ REMEMBER:
             print(f"   💾 История: {conversation_path}")
             print(f"   🎬 GIF: logs/step1_email_{timestamp}.gif")
             print(f"   🌐 URL: https://temp-mail.org/en/")
-            
-            agent = Agent(
+
+            # Для моделей computer-use отключаем строгий структурированный вывод,
+            # т.к. JSON-режим конфликтует с инструментами Computer Use
+            is_computer_use = (
+                isinstance(self.rate_limited_llm, RateLimitedLLM)
+                and hasattr(self.rate_limited_llm.llm, 'model')
+                and ('computer-use' in str(self.rate_limited_llm.llm.model).lower())
+            )
+
+    agent = Agent(
                 task=self.build_email_parser_mission(),
                 llm=self.rate_limited_llm,
                 browser_profile=profile,
@@ -544,7 +552,7 @@ REMEMBER:
                 max_steps=15,  # Ограничиваем количество шагов
                 
                 # Структурированный вывод
-                output_model_schema=EmailParserResult,
+                output_model_schema=None if is_computer_use else EmailParserResult,
                 
                 # Тайминги
                 step_timeout=120,  # 2 минуты достаточно для получения email
@@ -560,6 +568,9 @@ REMEMBER:
                 generate_gif=f"logs/step1_email_{timestamp}.gif",
                 task_id=task_id,
                 source="email_parser_step1",
+                # В режиме computer-use разрешаем полноценную работу с инструментами
+                # Никаких ограничений на tool-calls здесь не задаём
+                extend_system_message=None,
                 
                 # Дополнительно
                 include_recent_events=True,
@@ -661,8 +672,15 @@ REMEMBER:
             print(f"   💾 История: {conversation_path}")
             print(f"   🎬 GIF: logs/step2_registration_{timestamp}.gif")
             print(f"   🌐 URL: {self.referral_url}")
-            
-            agent = Agent(
+
+            # Для моделей computer-use отключаем строгий структурированный вывод
+            is_computer_use = (
+                isinstance(self.rate_limited_llm, RateLimitedLLM)
+                and hasattr(self.rate_limited_llm.llm, 'model')
+                and ('computer-use' in str(self.rate_limited_llm.llm.model).lower())
+            )
+
+    agent = Agent(
                 task=self.build_registration_mission(email),
                 llm=self.rate_limited_llm,
                 browser_profile=profile,
@@ -672,7 +690,7 @@ REMEMBER:
                 max_failures=20,
                 
                 # Структурированный вывод
-                output_model_schema=RegistrationResult,
+                output_model_schema=None if is_computer_use else RegistrationResult,
                 
                 # Тайминги
                 step_timeout=STEP_TIMEOUT,
@@ -688,6 +706,9 @@ REMEMBER:
                 generate_gif=f"logs/step2_registration_{timestamp}.gif",
                 task_id=task_id,
                 source="registration_step2",
+                # В режиме computer-use разрешаем полноценную работу с инструментами
+                # Никаких ограничений на tool-calls здесь не задаём
+                extend_system_message=None,
                 
                 # Дополнительно
                 include_recent_events=True,
@@ -732,9 +753,9 @@ REMEMBER:
                 self.status = "unknown"
                 
             # Держим браузер открытым для проверки
-            print(f"\n💤 Браузер останется открытым на 1 час для проверки")
+            print(f"\n💤 Браузер останется открытым на {BROWSER_KEEP_ALIVE} сек. для проверки")
             print("   Нажмите Ctrl+C для завершения...")
-            await asyncio.sleep(3600)  # 1 час
+            await asyncio.sleep(BROWSER_KEEP_ALIVE)
             await agent.close()
             
             return self.status == "success"

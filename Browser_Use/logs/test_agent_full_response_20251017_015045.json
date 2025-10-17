@@ -1,0 +1,73 @@
+{
+  "sdk_http_response": {
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "vary": "Origin, X-Origin, Referer",
+      "content-encoding": "gzip",
+      "date": "Thu, 16 Oct 2025 22:50:44 GMT",
+      "server": "scaffolding on HTTPServer2",
+      "x-xss-protection": "0",
+      "x-frame-options": "SAMEORIGIN",
+      "x-content-type-options": "nosniff",
+      "server-timing": "gfet4t7; dur=3298",
+      "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+      "transfer-encoding": "chunked"
+    },
+    "body": null
+  },
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "video_metadata": "None",
+            "thought": "None",
+            "inline_data": "None",
+            "file_data": "None",
+            "thought_signature": "b'\\n\\x92\\x01\\x01\\xd1\\xed\\x8ao\\r\\xc9<\\\\\\n\\xc4\\xb0bo\\x03\\xad\\x87\\xa1\\xe27\\xf6AC\\xe9\\x16\\t\\xb1\\xa1\\xd0\\xba\\x97\\x86\\xf5\\x11\\xf5\\x18\\xbf\\xac\\xed\\x08\\xeaa\\xdfg{\\xd4I&\\r V\\x98\"\\x97\\xc6\\'\\xdd\\x99\\xfeT)-y\\xcc\\x14\\xe8R\\x02M\\xa5\\x8a\\xb8\\xf0\\x08\\xaer\\xaa\\xfcm\\xf6\\xbc>\\xc9\\xbc=\\xe7Q\\xdd\\x91[;L\\x98snuR<\\x82\\x8c\\xccQ\\xa4k\\xbe\\xccYI\\xc8}\\x12 \\x848\\x17.s\\'\\xd0\\xea,\\x88\\x9f\\x9e\\x037\\x14z\\xb4(B{\\x19f\\xce\\xf4\\x88e\\x91<)U\\xb3\\xeb\\xe0|'",
+            "function_call": "None",
+            "code_execution_result": "None",
+            "executable_code": "None",
+            "function_response": "None",
+            "text": "'Computer-use model is reachable.'"
+          }
+        ],
+        "role": "model"
+      },
+      "citation_metadata": null,
+      "finish_message": null,
+      "token_count": null,
+      "finish_reason": "STOP",
+      "url_context_metadata": null,
+      "avg_logprobs": null,
+      "grounding_metadata": null,
+      "index": 0,
+      "logprobs_result": null,
+      "safety_ratings": null
+    }
+  ],
+  "create_time": null,
+  "model_version": "gemini-2.5-computer-use-preview-10-2025",
+  "prompt_feedback": null,
+  "response_id": "xHbxaPDuMP-ivdIPzqLdgA4",
+  "usage_metadata": {
+    "cache_tokens_details": null,
+    "cached_content_token_count": null,
+    "candidates_token_count": 7,
+    "candidates_tokens_details": null,
+    "prompt_token_count": 22,
+    "prompt_tokens_details": [
+      {
+        "modality": "TEXT",
+        "token_count": 22
+      }
+    ],
+    "thoughts_token_count": 25,
+    "tool_use_prompt_token_count": null,
+    "tool_use_prompt_tokens_details": null,
+    "total_token_count": 54,
+    "traffic_type": null
+  },
+  "automatic_function_calling_history": [],
+  "parsed": null
+}

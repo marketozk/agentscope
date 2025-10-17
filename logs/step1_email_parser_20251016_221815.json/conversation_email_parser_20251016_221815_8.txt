@@ -1,0 +1,407 @@
+ system 
+You are an AI agent designed to operate in an iterative loop to automate browser tasks. Your ultimate goal is accomplishing the task provided in <user_request>.
+<intro>
+You excel at following tasks:
+1. Navigating complex websites and extracting precise information
+2. Automating form submissions and interactive web actions
+3. Gathering and saving information 
+4. Using your filesystem effectively to decide what to keep in your context
+5. Operate effectively in an agent loop
+6. Efficiently performing diverse web tasks
+</intro>
+<language_settings>
+- Default working language: **English**
+- Always respond in the same language as the user request
+</language_settings>
+<input>
+At every step, your input will consist of: 
+1. <agent_history>: A chronological event stream including your previous actions and their results.
+2. <agent_state>: Current <user_request>, summary of <file_system>, <todo_contents>, and <step_info>.
+3. <browser_state>: Current URL, open tabs, interactive elements indexed for actions, and visible page content.
+4. <browser_vision>: Screenshot of the browser with bounding boxes around interactive elements. If you used screenshot before, this will contain a screenshot.
+5. <read_state> This will be displayed only if your previous action was extract or read_file. This data is only shown in the current step.
+</input>
+<agent_history>
+Agent history will be given as a list of step information as follows:
+<step_{step_number}>:
+Evaluation of Previous Step: Assessment of last action
+Memory: Your memory of this step
+Next Goal: Your goal for this step
+Action Results: Your actions and their results
+</step_{step_number}>
+and system messages wrapped in <sys> tag.
+</agent_history>
+<user_request>
+USER REQUEST: This is your ultimate objective and always remains visible.
+- This has the highest priority. Make the user happy.
+- If the user request is very specific - then carefully follow each step and dont skip or hallucinate steps.
+- If the task is open ended you can plan yourself how to get it done.
+</user_request>
+<browser_state>
+1. Browser State will be given as:
+Current URL: URL of the page you are currently viewing.
+Open Tabs: Open tabs with their ids.
+Interactive Elements: All interactive elements will be provided in format as [index]<type>text</type> where
+- index: Numeric identifier for interaction
+- type: HTML element type (button, input, etc.)
+- text: Element description
+Examples:
+[33]<div>User form</div>
+\t*[35]<button aria-label='Submit form'>Submit</button>
+Note that:
+- Only elements with numeric indexes in [] are interactive
+- (stacked) indentation (with \t) is important and means that the element is a (html) child of the element above (with a lower index)
+- Elements tagged with a star `*[` are the new interactive elements that appeared on the website since the last step - if url has not changed. Your previous actions caused that change. Think if you need to interact with them, e.g. after input you might need to select the right option from the list.
+- Pure text elements without [] are not interactive.
+</browser_state>
+<browser_vision>
+If you used screenshot before, you will be provided with a screenshot of the current page with  bounding boxes around interactive elements. This is your GROUND TRUTH: reason about the image in your thinking to evaluate your progress.
+If an interactive index inside your browser_state does not have text information, then the interactive index is written at the top center of it's element in the screenshot.
+Use screenshot if you are unsure or simply want more information.
+</browser_vision>
+<browser_rules>
+Strictly follow these rules while using the browser and navigating the web:
+- Only interact with elements that have a numeric [index] assigned.
+- Only use indexes that are explicitly provided.
+- If research is needed, open a **new tab** instead of reusing the current one.
+- If the page changes after, for example, an input text action, analyse if you need to interact with new elements, e.g. selecting the right option from the list.
+- By default, only elements in the visible viewport are listed. Use scrolling tools if you suspect relevant content is offscreen which you need to interact with. Scroll ONLY if there are more pixels below or above the page.
+- You can scroll by a specific number of pages using the pages parameter (e.g., 0.5 for half page, 2.0 for two pages).
+- If a captcha appears, attempt solving it if possible. If not, use fallback strategies (e.g., alternative site, backtrack).
+- If expected elements are missing, try refreshing, scrolling, or navigating back.
+- If the page is not fully loaded, use the wait action.
+- You can call extract on specific pages to gather structured semantic information from the entire page, including parts not currently visible.
+- Call extract only if the information you are looking for is not visible in your <browser_state> otherwise always just use the needed text from the <browser_state>.
+- Calling the extract tool is expensive! DO NOT query the same page with the same extract query multiple times. Make sure that you are on the page with relevant information based on the screenshot before calling this tool.
+- If you fill an input field and your action sequence is interrupted, most often something changed e.g. suggestions popped up under the field.
+- If the action sequence was interrupted in previous step due to page changes, make sure to complete any remaining actions that were not executed. For example, if you tried to input text and click a search button but the click was not executed because the page changed, you should retry the click action in your next step.
+- If the <user_request> includes specific page information such as product type, rating, price, location, etc., try to apply filters to be more efficient.
+- The <user_request> is the ultimate goal. If the user specifies explicit steps, they have always the highest priority.
+- If you input into a field, you might need to press enter, click the search button, or select from dropdown for completion.
+- Don't login into a page if you don't have to. Don't login if you don't have the credentials. 
+- There are 2 types of tasks always first think which type of request you are dealing with:
+1. Very specific step by step instructions:
+- Follow them as very precise and don't skip steps. Try to complete everything as requested.
+2. Open ended tasks. Plan yourself, be creative in achieving them.
+- If you get stuck e.g. with logins or captcha in open-ended tasks you can re-evaluate the task and try alternative ways, e.g. sometimes accidentally login pops up, even though there some part of the page is accessible or you get some information via web search.
+- If you reach a PDF viewer, the file is automatically downloaded and you can see its path in <available_file_paths>. You can either read the file or scroll in the page to see more.
+</browser_rules>
+<file_system>
+- You have access to a persistent file system which you can use to track progress, store results, and manage long tasks.
+- Your file system is initialized with a `todo.md`: Use this to keep a checklist for known subtasks. Use `replace_file` tool to update markers in `todo.md` as first action whenever you complete an item. This file should guide your step-by-step execution when you have a long running task.
+- If you are writing a `csv` file, make sure to use double quotes if cell elements contain commas.
+- If the file is too large, you are only given a preview of your file. Use `read_file` to see the full content if necessary.
+- If exists, <available_file_paths> includes files you have downloaded or uploaded by the user. You can only read or upload these files but you don't have write access.
+- If the task is really long, initialize a `results.md` file to accumulate your results.
+- DO NOT use the file system if the task is less than 10 steps!
+</file_system>
+<task_completion_rules>
+You must call the `done` action in one of two cases:
+- When you have fully completed the USER REQUEST.
+- When you reach the final allowed step (`max_steps`), even if the task is incomplete.
+- If it is ABSOLUTELY IMPOSSIBLE to continue.
+The `done` action is your opportunity to terminate and share your findings with the user.
+- Set `success` to `true` only if the full USER REQUEST has been completed with no missing components.
+- If any part of the request is missing, incomplete, or uncertain, set `success` to `false`.
+- You can use the `text` field of the `done` action to communicate your findings and `files_to_display` to send file attachments to the user, e.g. `["results.md"]`.
+- Put ALL the relevant information you found so far in the `text` field when you call `done` action.
+- Combine `text` and `files_to_display` to provide a coherent reply to the user and fulfill the USER REQUEST.
+- You are ONLY ALLOWED to call `done` as a single action. Don't call it together with other actions.
+- If the user asks for specified format, such as "return JSON with following structure", "return a list of format...", MAKE sure to use the right format in your answer.
+- If the user asks for a structured output, your `done` action's schema will be modified. Take this schema into account when solving the task!
+</task_completion_rules>
+<action_rules>
+- You are allowed to use a maximum of 10 actions per step.
+If you are allowed multiple actions, you can specify multiple actions in the list to be executed sequentially (one after another).
+- If the page changes after an action, the sequence is interrupted and you get the new state.
+</action_rules>
+<efficiency_guidelines>
+You can output multiple actions in one step. Try to be efficient where it makes sense. Do not predict actions which do not make sense for the current page.
+**Recommended Action Combinations:**
+- `input` + `click` → Fill form field and submit/search in one step
+- `input` + `input` → Fill multiple form fields
+- `click` + `click` → Navigate through multi-step flows (when the page does not navigate between clicks)
+- `scroll` with pages 10 + `extract` → Scroll to the bottom of the page to load more content before extracting structured data
+- File operations + browser actions
+Do not try multiple different paths in one step. Always have one clear goal per step.
+Its important that you see in the next step if your action was successful, so do not chain actions which change the browser state multiple times, e.g.
+- do not use click and then navigate, because you would not see if the click was successful or not.
+- or do not use switch and switch together, because you would not see the state in between.
+- do not use input and then scroll, because you would not see if the input was successful or not.
+</efficiency_guidelines>
+<reasoning_rules>
+You must reason explicitly and systematically at every step in your `thinking` block.
+Exhibit the following reasoning patterns to successfully achieve the <user_request>:
+- Reason about <agent_history> to track progress and context toward <user_request>.
+- Analyze the most recent "Next Goal" and "Action Result" in <agent_history> and clearly state what you previously tried to achieve.
+- Analyze all relevant items in <agent_history>, <browser_state>, <read_state>, <file_system>, <read_state> and the screenshot to understand your state.
+- Explicitly judge success/failure/uncertainty of the last action. Never assume an action succeeded just because it appears to be executed in your last step in <agent_history>. For example, you might have "Action 1/1: Input '2025-05-05' into element 3." in your history even though inputting text failed. Always verify using <browser_vision> (screenshot) as the primary ground truth. If a screenshot is unavailable, fall back to <browser_state>. If the expected change is missing, mark the last action as failed (or uncertain) and plan a recovery.
+- If todo.md is empty and the task is multi-step, generate a stepwise plan in todo.md using file tools.
+- Analyze `todo.md` to guide and track your progress.
+- If any todo.md items are finished, mark them as complete in the file.
+- Analyze whether you are stuck, e.g. when you repeat the same actions multiple times without any progress. Then consider alternative approaches e.g. scrolling for more context or send_keys to interact with keys directly or different pages.
+- Analyze the <read_state> where one-time information are displayed due to your previous action. Reason about whether you want to keep this information in memory and plan writing them into a file if applicable using the file tools.
+- If you see information relevant to <user_request>, plan saving the information into a file.
+- Before writing data into a file, analyze the <file_system> and check if the file already has some content to avoid overwriting.
+- Decide what concise, actionable context should be stored in memory to inform future reasoning.
+- When ready to finish, state you are preparing to call done and communicate completion/results to the user.
+- Before done, use read_file to verify file contents intended for user output.
+- Always reason about the <user_request>. Make sure to carefully analyze the specific steps and information required. E.g. specific filters, specific form fields, specific information to search. Make sure to always compare the current trajactory with the user request and think carefully if thats how the user requested it.
+</reasoning_rules>
+<examples>
+Here are examples of good output patterns. Use them as reference but never copy them directly.
+<todo_examples>
+  "write_file": {
+    "file_name": "todo.md",
+    "content": "# ArXiv CS.AI Recent Papers Collection Task\n\n## Goal: Collect metadata for 20 most recent papers\n\n## Tasks:\n- [ ] Navigate to https://arxiv.org/list/cs.AI/recent\n- [ ] Initialize papers.md file for storing paper data\n- [ ] Collect paper 1/20: The Automated LLM Speedrunning Benchmark\n- [x] Collect paper 2/20: AI Model Passport\n- [ ] Collect paper 3/20: Embodied AI Agents\n- [ ] Collect paper 4/20: Conceptual Topic Aggregation\n- [ ] Collect paper 5/20: Artificial Intelligent Disobedience\n- [ ] Continue collecting remaining papers from current page\n- [ ] Navigate through subsequent pages if needed\n- [ ] Continue until 20 papers are collected\n- [ ] Verify all 20 papers have complete metadata\n- [ ] Final review and completion"
+  }
+</todo_examples>
+<evaluation_examples>
+- Positive Examples:
+"evaluation_previous_goal": "Successfully navigated to the product page and found the target information. Verdict: Success"
+"evaluation_previous_goal": "Clicked the login button and user authentication form appeared. Verdict: Success"
+- Negative Examples:
+"evaluation_previous_goal": "Failed to input text into the search bar as I cannot see it in the image. Verdict: Failure"
+"evaluation_previous_goal": "Clicked the submit button with index 15 but the form was not submitted successfully. Verdict: Failure"
+</evaluation_examples>
+<memory_examples>
+"memory": "Visited 2 of 5 target websites. Collected pricing data from Amazon ($39.99) and eBay ($42.00). Still need to check Walmart, Target, and Best Buy for the laptop comparison."
+"memory": "Found many pending reports that need to be analyzed in the main page. Successfully processed the first 2 reports on quarterly sales data and moving on to inventory analysis and customer feedback reports."
+</memory_examples>
+<next_goal_examples>
+"next_goal": "Click on the 'Add to Cart' button to proceed with the purchase flow."
+"next_goal": "Extract details from the first item on the page."
+</next_goal_examples>
+</examples>
+<output>
+You must ALWAYS respond with a valid JSON in this exact format:
+{
+  "thinking": "A structured <think>-style reasoning block that applies the <reasoning_rules> provided above.",
+  "evaluation_previous_goal": "Concise one-sentence analysis of your last action. Clearly state success, failure, or uncertain.",
+  "memory": "1-3 sentences of specific memory of this step and overall progress. You should put here everything that will help you track progress in future steps. Like counting pages visited, items found, etc.",
+  "next_goal": "State the next immediate goal and action to achieve it, in one clear sentence."
+  "action":[{"navigate": { "url": "url_value"}}, // ... more actions in sequence]
+}
+Action list should NEVER be empty.
+</output>
+
+
+ user 
+<agent_history>
+Agent initialized
+<step>
+Agent initialized. No previous action to evaluate. Verdict: N/A
+Starting the process of extracting a temporary email address from temp-mail.org.
+Navigate to https://temp-mail.org/en/ to begin the email extraction process.
+Result
+Navigated to https://temp-mail.org/en/
+<step>
+Successfully navigated to the specified URL. Verdict: Success
+Navigated to temp-mail.org. Now waiting for the email to load.
+Wait for 10 seconds to allow the temporary email address to load on the page, then attempt to extract it.
+<step>
+Successfully waited for 10 seconds. Verdict: Success
+Navigated to temp-mail.org and waited for 10 seconds. The email address appears to be loaded.
+Extract the email address from the page using JavaScript evaluation and then validate and return it in the specified format.
+Result
+Code: (function(){try{const el=document.querySelector('#mail');return el?el.value:'not found'}catch(e){return 'Error: '+e.message}})()
+
+Result: not found
+<step>
+Failed to extract the email address using JavaScript, as the element was not found or the page was not fully loaded. Verdict: Failure
+Navigated to temp-mail.org and waited for 10 seconds. The first extraction attempt failed. I need to refresh the page and try again.
+Refresh the page to ensure all elements are loaded, then wait for 10 seconds as per the instructions, and attempt to extract the email again.
+Result
+Navigated to https://temp-mail.org/en/
+<step>
+Successfully refreshed the page. Verdict: Success
+Navigated to temp-mail.org and refreshed the page. This is the second attempt to extract the email.
+Wait for 10 seconds to allow the temporary email address to load on the page, then attempt to extract it using JavaScript evaluation.
+Result
+Waited for 10 seconds
+</agent_history>
+
+<agent_state>
+<user_request>
+
+MISSION: Extract temporary email address from temp-mail.org
+
+YOUR TASK:
+  Get a temporary email address from https://temp-mail.org/en/ that will be used for Airtable registration.
+
+STEP-BY-STEP WORKFLOW:
+  1. Navigate to https://temp-mail.org/en/
+  
+  2. ⚠️ CRITICAL: WAIT 10 seconds after page loads
+     - The email does NOT appear immediately!
+     - Textbox shows "Loading..." at first, then email appears
+  
+  3. Extract email using one of these methods:
+     METHOD A (Recommended): JavaScript evaluation
+       ```
+       document.querySelector('#mail').textContent
+       ```
+     
+     METHOD B: Find textbox element and read its value
+       - Look for textbox near "Your Temporary Email Address" heading
+       - Element ID is usually #mail or similar
+  
+  4. VALIDATE extracted email:
+     - Must contain @ symbol
+     - Must have domain (e.g., @fogdiver.com, @mailto.plus)
+     - Format: xxxxx@domain.com
+  
+  5. RETURN the email in structured format
+
+ANTI-LOOP RULES:
+  - If email shows "Loading..." → WAIT 5 more seconds
+  - If email not visible after 15s → Refresh page ONCE
+  - If still not visible after refresh → Try JavaScript method
+  - Maximum 3 attempts total
+  - DO NOT click random elements hoping to find email
+
+SUCCESS CHECK:
+  ✅ Email extracted = Contains @ and domain name
+  ❌ Failed = Still shows "Loading..." or empty after 20s
+
+OUTPUT FORMAT (MANDATORY):
+  {
+    "email": "the-extracted-email@domain.com",
+    "success": true,
+    "notes": "Email successfully extracted after 10s wait"
+  }
+
+IMPORTANT:
+  - Email MUST be valid format (xxx@domain.com)
+  - DO NOT invent or guess email
+  - If you can't find email after 3 attempts, set success=false
+  - Typical domains: @fogdiver.com, @mailto.plus, @guerrillamail.com
+
+Expected output format: EmailParserResult
+{
+  "description": "\u0420\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442 \u043f\u0430\u0440\u0441\u0438\u043d\u0433\u0430 email \u0441 temp-mail.org",
+  "properties": {
+    "email": {
+      "description": "\u041f\u043e\u043b\u0443\u0447\u0435\u043d\u043d\u044b\u0439 \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u044b\u0439 email \u0430\u0434\u0440\u0435\u0441 (\u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: user123@gamegta.com)",
+      "title": "Email",
+      "type": "string"
+    },
+    "success": {
+      "description": "\u0423\u0441\u043f\u0435\u0448\u043d\u043e \u043b\u0438 \u043f\u043e\u043b\u0443\u0447\u0435\u043d email",
+      "title": "Success",
+      "type": "boolean"
+    },
+    "notes": {
+      "description": "\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u0430\u044f \u0438\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f \u043e \u043f\u0440\u043e\u0446\u0435\u0441\u0441\u0435",
+      "title": "Notes",
+      "type": "string"
+    }
+  },
+  "required": [
+    "email",
+    "success",
+    "notes"
+  ],
+  "title": "EmailParserResult",
+  "type": "object"
+}
+</user_request>
+<file_system>
+
+</file_system>
+<todo_contents>
+[empty todo.md, fill it when applicable]
+</todo_contents>
+<step_info>Step8 maximum:100
+Today:2025-10-16</step_info>
+</agent_state>
+<browser_state>
+<page_stats>12 links, 20 interactive, 0 iframes, 2 scroll containers, 1 shadow(open), 0 shadow(closed), 8 images, 189 total elements</page_stats>
+Current tab: 0003
+Available tabs:
+Tab 0003: https://temp-mail.org/en/ - Temp Mail - Disposable Tempora
+
+<page_info>0.0 pages above, 2.2 pages below, 3.2 total pages</page_info>
+
+Recent browser events: [{"event_type": "ScreenshotEvent", "timestamp": "2025-10-16T19:20:07.562621+00:00"}, {"event_type": "NavigationCompleteEvent", "timestamp": "2025-10-16T19:20:06.833425+00:00", "url": "https://temp-mail.org/en/", "error_message": null, "target_id": "C8B57326300355B1BE9DDC63EF190003"}, {"event_type": "BrowserStateRequestEvent", "timestamp": "2025-10-16T19:20:06.830890+00:00"}, {"event_type": "ScreenshotEvent", "timestamp": "2025-10-16T19:19:55.522626+00:00"}, {"event_type": "NavigationCompleteEvent", "timestamp": "2025-10-16T19:19:54.787217+00:00", "url": "https://temp-mail.org/en/", "error_message": null, "target_id": "C8B57326300355B1BE9DDC63EF190003"}, {"event_type": "BrowserStateRequestEvent", "timestamp": "2025-10-16T19:19:54.786624+00:00"}, {"event_type": "NavigationCompleteEvent", "timestamp": "2025-10-16T19:19:54.783716+00:00", "url": "https://temp-mail.org/en/", "error_message": null, "target_id": "C8B57326300355B1BE9DDC63EF190003"}, {"event_type": "AgentFocusChangedEvent", "timestamp": "2025-10-16T19:19:54.683221+00:00", "url": "https://temp-mail.org/en/", "target_id": "C8B57326300355B1BE9DDC63EF190003"}, {"event_type": "NavigationCompleteEvent", "timestamp": "2025-10-16T19:19:54.681664+00:00", "url": "https://temp-mail.org/en/", "error_message": null, "target_id": "C8B57326300355B1BE9DDC63EF190003"}, {"event_type": "NavigationStartedEvent", "timestamp": "2025-10-16T19:19:54.486242+00:00", "url": "https://temp-mail.org/en/", "target_id": "C8B57326300355B1BE9DDC63EF190003"}]
+Interactive elements:
+[Start of page]
+[1]<a class=tm-btn btn-outline-dark />
+	App Store
+[2]<a class=tm-btn btn-outline-dark />
+	Google Play
+[3]<a class=logo thide no-ajaxy />
+	Temp Mail
+[4]<a class=headerSeoLink />
+	Temp Number 📲
+[5]<button class=tm-btn btn-outline-dark goPremium goPremiumBtn />
+	Premium
+Your Temporary Email Address
+|SHADOW(open)|[6]<input id=mail type=text class=emailbox-input opentip />
+[7]<button class=btn-rds icon-btn btn-l-gary popover-qr />
+*[8]<button class=btn-rds icon-btn bg-theme click-to-copy copyIconGreenBtn />
+Forget about spam, advertising mailings, hacking and attacking robots. Keep your real mailbox clean and secure. Temp Mail provides temporary, secure, anonymous, free, disposable email address.
+*[9]<button id=click-to-copy class=no-ajaxy tm-btn btn-gray click-to-copy />
+	Copy
+[10]<a id=click-to-refresh class=no-ajaxy tm-btn btn-gray click-to-refresh />
+	Refresh
+[11]<a id=click-to-change class=no-ajaxy tm-btn btn-gray click-to-change />
+	Change
+[12]<button id=click-to-delete class=no-ajaxy tm-btn btn-gray click-to-delete nu-reward />
+	Delete
+Sender
+Subject
+View
+[13]<path class=emptyInboxRotation />
+[14]<path class=emptyInboxRotation />
+Your inbox is empty
+Waiting for incoming emails
+What is Disposable Temporary E-mail?
+Disposable email
+- is a free email service that allows to receive email at a temporary address that self-destructed after a certain time elapses. It is also known by names like : tempmail, 10minutemail, 10minmail, throwaway email, fake-mail , fake email generator, burner mail or trash-mail. Many forums, Wi-Fi owners, websites and blogs ask visitors to register before they can view content, post comments or download something. Temp-Mail - is most advanced throwaway email service that helps you avoid spam and stay safe.
+Popular Articles
+[15]<a class=no-ajaxy />
+	Private domains. How to get your own Temporary Email (2021)
+How to create temporary email on your own private domain and how it helps you to bypass common issues with registrations.
+[16]<a class=no-ajaxy />
+	How to receive SMS otp verification online in 5 min. Guide. (2021)
+In this guide, we’ll detail how to use a temporary phone number to receive one-time password (OTP) verification code texts to register for online services.
+[17]<a class=no-ajaxy />
+	New Temp Mail app for Android (2021)
+Read about the new features of Temp Mail mobile app for Android smartphones and tablets.
+[18]<a class=no-ajaxy />
+	Top mobile games for Android and registration via anonymous email
+Mobile games are perfect when you have some spare time or feel boring. Many best-selling projects that had millions of fans among PC gamers...
+|SCROLL|<div class=inner-text-box /> (0.0 pages above, 0.2 pages below)
+	[19]<a class=no-ajaxy />
+		What is ransomware. The differences between ransomware and viruses and how to protect yourself from ransomware
+	As technology actively develops, intruders use ever more sophisticated methods of stealing our  money. We often get short messages to the mail or mobile...
+|SCROLL|<div class=inner-text-box /> (0.0 pages above, 0.1 pages below)
+	[20]<a class=no-ajaxy />
+		Disposable email for a Social media (Facebook, etc...)
+	Every time, you want to create account on some forum or social media, like Facebook, you have to enter information about your e-mail box to get an activation link...
+The Tech behind Disposable Email Addresses
+Everyone owns an email address each and every hour, for everything from connecting at work, with business prospects, reaching out to friends and colleagues using the email address as an online passport. Nearly 99% of all apps and services we sign-up today required an email address, likewise to most shoppers loyalty cards, contest and offer entries, and more.
+We all enjoy having an email address, but getting tons of spam emails each day doesn’t feel comfortable. Furthermore, it’s entirely common for stores to have their databases hacked, leaving your business email address at risk and more likely to end up on spam lists. Still, nothing done online is 100% private. Thus you need to protect your email contact identity and best done using disposable emails address.
+So, What Is A Disposable Email Address?
+Recently, I found a bounce rate complex than usual on my latest email blast! I later realized the surge of users (or bots) signing up for my services hiding their real identity using disposable mail addresses.
+Disposable email address (DEA) technically means an approach where a user’s with a unique email address gets a temporary email address for your current contact. The DEA allow the creation of an email address that passes validity need to sign-up for services and website without having to show your true identity.
+... 2.2 pages below - scroll to see more or extract structured data if you are looking for specific information ...
+</browser_state>
+
+Current screenshot:
+
+ RESPONSE
+{
+  "thinking": "I have navigated to temp-mail.org and waited for 10 seconds twice. The first attempt to extract the email using JavaScript failed because the element was not found. I refreshed the page and waited again. Now, I will try to extract the email using the recommended JavaScript method again. Looking at the screenshot, I can see an email address `yanab99558@eifts.com` displayed in the input field with index 6. This indicates that the email has loaded successfully.",
+  "evaluation_previous_goal": "Successfully waited for 10 seconds after refreshing the page. Verdict: Success",
+  "memory": "Navigated to temp-mail.org, refreshed the page once, and waited for 10 seconds twice. The email address appears to be visible in the screenshot.",
+  "next_goal": "Extract the email address from the input field with id 'mail' using JavaScript evaluation, validate it, and return it in the specified structured format.",
+  "action": [
+    {
+      "evaluate": {
+        "code": "(function(){try{const el=document.querySelector('#mail');return el?el.value:'not found'}catch(e){return 'Error: '+e.message}})()"
+      }
+    }
+  ]
+}

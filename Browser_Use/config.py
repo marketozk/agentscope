@@ -12,6 +12,17 @@ from browser_use.llm.google import ChatGoogle
 from langchain_openai import ChatOpenAI
 from datetime import datetime, timedelta
 
+# Импорты для инструментов Gemini
+# - Новый SDK (google.genai) требуется для Computer Use tool
+# - Старый SDK (google.generativeai) можем игнорировать для Computer Use
+try:
+    from google import genai as genai_new
+    from google.genai import types as genai_types
+    GENAI_NEW_AVAILABLE = True
+except ImportError:
+    GENAI_NEW_AVAILABLE = False
+    print("⚠️  google.genai не установлен. Инструмент Computer Use будет недоступен для моделей computer-use.")
+
 # Загружаем переменные окружения
 ENV_PATH = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
@@ -58,19 +69,15 @@ class ModelConfig:
         if len(enabled_models) > 1:
             print(f"⚠️  Найдено {len(enabled_models)} активных моделей, используется первая")
         
-        # Возвращаем первую активную модель
         model_name = list(enabled_models.keys())[0]
         model_config = enabled_models[model_name]
-        model_config["name"] = model_name  # Добавляем имя в конфиг
+        model_config["name"] = model_name
         
         return model_config
     
     @classmethod
     def get_config(cls, model_name: str = None):
-        """
-        Получить конфигурацию модели
-        Если model_name не указан, возвращает активную модель
-        """
+        """Получить конфигурацию модели"""
         if model_name is None:
             return cls.get_enabled_model()
         
@@ -116,40 +123,27 @@ class RateLimiter:
     def __init__(self, requests_per_minute: int, requests_per_day: int):
         self.requests_per_minute = requests_per_minute
         self.requests_per_day = requests_per_day
-        
-        # История запросов
         self.minute_requests = []
         self.day_requests = []
-        
-        # Статистика
         self.total_requests = 0
         self.blocked_requests = 0
         
     def _cleanup_old_requests(self):
         """Удаление старых записей из истории"""
         now = datetime.now()
-        
-        # Очистка минутного окна
         minute_ago = now - timedelta(minutes=1)
         self.minute_requests = [t for t in self.minute_requests if t > minute_ago]
-        
-        # Очистка дневного окна
         day_ago = now - timedelta(days=1)
         self.day_requests = [t for t in self.day_requests if t > day_ago]
     
     def can_make_request(self) -> tuple[bool, str]:
-        """
-        Проверка возможности выполнения запроса
-        Returns: (можно_выполнить, причина_отказа)
-        """
+        """Проверка возможности выполнения запроса"""
         self._cleanup_old_requests()
         
-        # Проверка минутного лимита
         if len(self.minute_requests) >= self.requests_per_minute:
             wait_time = 60 - (datetime.now() - self.minute_requests[0]).seconds
             return False, f"Превышен лимит {self.requests_per_minute} запросов/мин. Подождите {wait_time}с"
         
-        # Проверка дневного лимита
         if len(self.day_requests) >= self.requests_per_day:
             oldest = self.day_requests[0]
             wait_time = (oldest + timedelta(days=1) - datetime.now()).seconds
@@ -166,29 +160,28 @@ class RateLimiter:
         self.total_requests += 1
     
     async def wait_if_needed(self) -> bool:
-        """
-        Ожидание если нужно соблюсти rate limit
-        Returns: True если запрос можно выполнить, False если достигнут дневной лимит
-        """
+        """Ожидание если нужно соблюсти rate limit"""
         can_request, reason = self.can_make_request()
         
         if can_request:
             return True
         
-        # Если это дневной лимит - не ждём
         if "дневной лимит" in reason:
             print(f"⛔ {reason}")
             self.blocked_requests += 1
             return False
         
-        # Если минутный лимит - ждём
         if "лимит" in reason and "запросов/мин" in reason:
-            # Извлекаем время ожидания
-            wait_seconds = int(reason.split("Подождите ")[1].split("с")[0])
-            print(f"⏳ {reason}")
-            print(f"⏰ Ожидание {wait_seconds} секунд...")
-            await asyncio.sleep(wait_seconds + 1)  # +1 для надёжности
-            return True
+            try:
+                wait_seconds = int(reason.split("Подождите ")[1].split("с")[0])
+                print(f"⏳ {reason}")
+                print(f"⏰ Ожидание {wait_seconds} секунд...")
+                await asyncio.sleep(wait_seconds + 1)
+                return True
+            except (IndexError, ValueError):
+                print(f"⚠️ Не удалось извлечь время ожидания из: {reason}. Ожидание 60с.")
+                await asyncio.sleep(61)
+                return True
         
         return False
     
@@ -196,12 +189,10 @@ class RateLimiter:
         """Получить статистику использования"""
         self._cleanup_old_requests()
         return {
-            "total_requests": self.total_requests,
-            "blocked_requests": self.blocked_requests,
+            "total_requests": self.total_requests, "blocked_requests": self.blocked_requests,
             "minute_remaining": self.requests_per_minute - len(self.minute_requests),
             "day_remaining": self.requests_per_day - len(self.day_requests),
-            "minute_used": len(self.minute_requests),
-            "day_used": len(self.day_requests)
+            "minute_used": len(self.minute_requests), "day_used": len(self.day_requests)
         }
     
     def print_stats(self):
@@ -212,10 +203,8 @@ class RateLimiter:
         print("="*60)
         print(f"Всего запросов: {stats['total_requests']}")
         print(f"Заблокировано: {stats['blocked_requests']}")
-        print(f"\nТекущая минута: {stats['minute_used']}/{self.requests_per_minute} "
-              f"(осталось: {stats['minute_remaining']})")
-        print(f"Текущий день: {stats['day_used']}/{self.requests_per_day} "
-              f"(осталось: {stats['day_remaining']})")
+        print(f"\nТекущая минута: {stats['minute_used']}/{self.requests_per_minute} (осталось: {stats['minute_remaining']})")
+        print(f"Текущий день: {stats['day_used']}/{self.requests_per_day} (осталось: {stats['day_remaining']})")
         print("="*60)
 
 
@@ -225,47 +214,90 @@ class AppConfig:
     """Основная конфигурация приложения"""
     
     def __init__(self):
-        # API ключ
         self.api_key = os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
-            raise ValueError(
-                "❌ GOOGLE_API_KEY не найден в .env файле!\n"
-                "Создайте файл .env на основе .env.example"
-            )
+            raise ValueError("❌ GOOGLE_API_KEY не найден в .env файле!")
         
-        # Выбор активной модели из JSON конфига
         self.model_config = ModelConfig.get_enabled_model()
         
-        # Rate limiter
         self.rate_limiter = RateLimiter(
             requests_per_minute=self.model_config["requests_per_minute"],
             requests_per_day=self.model_config["requests_per_day"]
         )
         
-        # Профиль браузера
         self.profile_path = Path(__file__).parent / "profile_data"
         self.profile_path.mkdir(exist_ok=True)
         
-        # Установка API ключа в окружение
         os.environ.setdefault("GOOGLE_API_KEY", self.api_key)
     
     def get_llm(self):
-        """Получить LLM модель"""
+        """Получить LLM модель с поддержкой Code Execution Tool"""
         provider = self.model_config.get("provider", "google")
+        model_string = self.model_config["model_string"]
         
         if provider == "google":
-            return ChatGoogle(
-                model=self.model_config["model_string"],
-                temperature=0.2,
-                api_key=self.api_key
-            )
+
+            if "computer-use" in model_string.lower():
+                if not GENAI_NEW_AVAILABLE:
+                    raise ImportError(
+                        "❌ Для моделей 'computer-use' требуется новый SDK 'google-genai'.\n"
+                        "Установите: pip install --upgrade google-genai"
+                    )
+                
+                print(f"💡 Модель '{model_string}' требует Code Execution Tool.")
+                print("   ⚙️  Инициализация Computer Use через ChatGoogle (новый SDK)...")
+
+                # =======================================================
+                # ↓↓↓↓ Правильный способ для browser-use: dict-конфиг ↓↓↓↓
+                # =======================================================
+                # Обертка ChatGoogle внутри browser-use модифицирует config как словарь.
+                # Передача объекта GenerateContentConfig приводит к ошибке
+                # "'GenerateContentConfig' object does not support item assignment".
+                # Поэтому используем plain dict c включенным Computer Use tool.
+                computer_use_config = {
+                    "tools": [
+                        {
+                            "computer_use": {
+                                # Значение среды берем строкой, чтобы избежать несовместимости enum
+                                # Возможные значения по SDK: "ENVIRONMENT_BROWSER" / "BROWSER"
+                                # Используем более совместимое "ENVIRONMENT_BROWSER".
+                                "environment": "ENVIRONMENT_BROWSER"
+                            }
+                        }
+                    ]
+                }
+
+                llm = ChatGoogle(
+                    model=model_string,
+                    temperature=0.2,
+                    api_key=self.api_key,
+                    config=computer_use_config,
+                    # ВАЖНО: у моделей computer-use не поддержан JSON mode с response_mime_type
+                    # Отключаем нативный structured_output, чтобы использовать fallback без response_mime_type
+                    supports_structured_output=False,
+                )
+                # =======================================================
+                
+                print("   ✅ Computer Use tool подключен!")
+                
+            else:
+                # Для обычных моделей Gemini возвращаем обертку ChatGoogle,
+                # которую, вероятно, ожидает ваш основной код
+                print(f"✅ Используется стандартная модель: '{model_string}'")
+                llm = ChatGoogle(
+                    model=model_string,
+                    temperature=0.2,
+                    api_key=self.api_key
+                )
+            return llm
+
         elif provider == "deepseek":
             deepseek_key = os.getenv("DEEPSEEK_API_KEY")
             if not deepseek_key:
                 raise ValueError("❌ DEEPSEEK_API_KEY не найден в .env файле!")
             
             return ChatOpenAI(
-                model=self.model_config["model_string"],
+                model=model_string,
                 temperature=0.2,
                 api_key=deepseek_key,
                 base_url="https://api.deepseek.com"
@@ -303,40 +335,26 @@ def get_app_config() -> AppConfig:
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 def get_llm():
-    """Получить LLM с учётом конфигурации"""
     config = get_app_config()
     return config.get_llm()
 
-
 def get_profile_path():
-    """Получить путь к профилю браузера"""
     config = get_app_config()
     return config.profile_path
 
-
 def get_rate_limiter() -> RateLimiter:
-    """Получить rate limiter"""
     config = get_app_config()
     return config.rate_limiter
 
-
 async def wait_for_rate_limit() -> bool:
-    """
-    Подождать если нужно для соблюдения rate limit
-    Returns: True если можно продолжить, False если достигнут дневной лимит
-    """
     rate_limiter = get_rate_limiter()
     return await rate_limiter.wait_if_needed()
 
-
 def register_api_request():
-    """Зарегистрировать выполненный API запрос"""
     rate_limiter = get_rate_limiter()
     rate_limiter.register_request()
 
-
 def print_api_stats():
-    """Вывести статистику использования API"""
     rate_limiter = get_rate_limiter()
     rate_limiter.print_stats()
 
@@ -344,11 +362,8 @@ def print_api_stats():
 # ==================== ДЕМОНСТРАЦИЯ ====================
 
 if __name__ == "__main__":
-    """Тестирование конфигурации"""
-    
     import sys
     
-    # Проверяем аргументы
     if len(sys.argv) > 1 and sys.argv[1] == "--list":
         ModelConfig.list_models()
         exit(0)
@@ -356,15 +371,12 @@ if __name__ == "__main__":
     print("\n🧪 ТЕСТИРОВАНИЕ КОНФИГУРАЦИИ\n")
     
     try:
-        # Инициализация
         config = get_app_config()
         config.print_config()
         
-        # Тест rate limiter
         print("\n🧪 Тест Rate Limiter:")
         rate_limiter = get_rate_limiter()
         
-        # Симуляция запросов
         for i in range(5):
             can_request, reason = rate_limiter.can_make_request()
             if can_request:
@@ -373,11 +385,9 @@ if __name__ == "__main__":
             else:
                 print(f"⛔ Запрос {i+1}: {reason}")
         
-        # Статистика
         rate_limiter.print_stats()
         
         print("\n💡 Совет: Используйте 'python config.py --list' для списка всех моделей")
         
-    except ValueError as e:
+    except (ValueError, FileNotFoundError) as e:
         print(f"\n❌ Ошибка: {e}")
-        print("\nСоздайте файл .env на основе .env.example")
