@@ -24,6 +24,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from typing import Optional
 from urllib.parse import urlparse
+import httpx
 
 # Новый SDK Google Generative AI (unified SDK)
 from google import genai
@@ -105,6 +106,49 @@ def extract_email_from_text(text: str) -> Optional[str]:
         return matches[0]
     
     return None
+
+
+async def get_random_user_data() -> dict:
+    """
+    Получает случайные имя и пароль из API randomdatatools.ru
+    
+    Returns:
+        dict: {
+            'name': 'Имя Фамилия',
+            'password': 'Сложный пароль'
+        }
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get("https://api.randomdatatools.ru/?gender=man")
+            response.raise_for_status()
+            data = response.json()
+            
+            # Формируем полное имя (FirstName + LastName)
+            first_name = data.get('FirstName', 'Иван')
+            last_name = data.get('LastName', 'Иванов')
+            full_name = f"{first_name} {last_name}"
+            
+            # Используем готовый пароль из API и добавляем спецсимволы для надёжности
+            api_password = data.get('Password', 'default123')
+            # Airtable требует минимум 8 символов, добавим спецсимвол для надёжности
+            password = f"{api_password}!@"
+            
+            user_data = {
+                'name': full_name,
+                'password': password
+            }
+            
+            print(f"✅ Получены случайные данные: {full_name}, пароль: {password}")
+            return user_data
+            
+    except Exception as e:
+        print(f"⚠️ Ошибка получения случайных данных: {e}. Использую дефолтные значения.")
+        # Fallback на дефолтные значения
+        return {
+            'name': 'Иван Иванов',
+            'password': 'SecurePass2024!'
+        }
 
 
 async def safe_screenshot(page, full_page: bool = False, timeout_ms: int = 10000) -> Optional[bytes]:
@@ -1703,17 +1747,31 @@ SUCCESS CHECK:
     return None
 
 
-async def run_airtable_registration_on_pages(email: str, page_mail, page_airtable, client, config, max_steps: int = 40) -> dict:
+async def run_airtable_registration_on_pages(email: str, user_data: dict, page_mail, page_airtable, client, config, max_steps: int = 40) -> dict:
     """
     ШАГ 2 (унифицированный): Регистрация на Airtable на ОТДЕЛЬНОЙ вкладке, оставляя почту открытой.
 
     Правило: вкладка с temp-mail (page_mail) не закрывается и не теряет состояние.
     Функцию extract_verification_link() выполняем на вкладке почты, а навигацию по verify URL — на вкладке Airtable.
+    
+    Args:
+        email: Email адрес для регистрации
+        user_data: Словарь с данными пользователя (name, password, birthdate)
+        page_mail: Playwright page объект для temp-mail
+        page_airtable: Playwright page объект для Airtable
+        client: Google AI client
+        config: Конфигурация для модели
+        max_steps: Максимальное количество шагов
     """
+    full_name = user_data.get('name', 'John Smith')
+    password = user_data.get('password', 'SecurePass2024!')
+    
     task = f"""
 MISSION: Register on Airtable and confirm email (Two-tab workflow)
 
 YOUR EMAIL: {email}
+YOUR FULL NAME: {full_name}
+YOUR PASSWORD: {password}
 REGISTRATION URL: https://airtable.com/invite/r/ovoAP1zR
 
 YOU HAVE TWO BROWSER TABS AVAILABLE:
@@ -1727,8 +1785,8 @@ AVAILABLE TAB SWITCHING FUNCTIONS:
 CRITICAL WORKFLOW:
   1) [AIRTABLE TAB - already active] Navigate to https://airtable.com/invite/r/ovoAP1zR and complete signup:
      - Email: {email}
-     - Full Name: Maria Rodriguez (or similar realistic name)
-     - Password: SecurePass2024!
+     - Full Name: {full_name}
+     - Password: {password}
      - Click "Create account" button ONCE
      - Wait 10 seconds to see if URL changes from /invite/
 
@@ -2017,7 +2075,7 @@ async def main_airtable_registration_unified():
     print(f"📄 Текущих вкладок: {len(context.pages)} (только mail)")
 
     try:
-    # ШАГ 1: получаем email на вкладке почты (вкладка почты остаётся открытой)
+        # ШАГ 1: получаем email на вкладке почты (вкладка почты остаётся открытой)
         print("\n📧 ШАГ 1: Получение временного email (вкладка почты остаётся открытой)...")
         email = await run_email_extraction_on_page(page_mail, client, config, max_steps=15)
 
@@ -2028,6 +2086,10 @@ async def main_airtable_registration_unified():
 
         print(f"\n✅ Email получен: {email}")
 
+        # Получаем случайные данные пользователя
+        print("\n🎲 Получение случайных данных пользователя...")
+        user_data = await get_random_user_data()
+
         # Только теперь создаём вторую вкладку под Airtable
         page_airtable = await context.new_page()
         if page_airtable.url == "" or not page_airtable.url:
@@ -2036,7 +2098,7 @@ async def main_airtable_registration_unified():
 
         # ШАГ 2: регистрация на Airtable с использованием двух вкладок
         print("\n📝 ШАГ 2: Регистрация на Airtable (почта не закрывается)...")
-        result = await run_airtable_registration_on_pages(email, page_mail, page_airtable, client, config, max_steps=40)
+        result = await run_airtable_registration_on_pages(email, user_data, page_mail, page_airtable, client, config, max_steps=40)
 
         # Сохранение результата
         save_registration_result(
