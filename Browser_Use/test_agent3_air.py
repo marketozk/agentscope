@@ -40,10 +40,15 @@ from playwright.async_api import async_playwright
 
 # Stealth плагин для обхода Cloudflare и других систем обнаружения автоматизации
 try:
-    from playwright_stealth import stealth_async
-except ImportError:
-    # Fallback если stealth_async не доступен
+    # ✅ ИСПРАВЛЕНО: В playwright-stealth 2.0.0 используется класс Stealth
+    from playwright_stealth import Stealth
+    stealth_instance = Stealth()
+    stealth_async = stealth_instance.apply_stealth_async
+    print("✅ Playwright Stealth 2.0.0 загружен успешно")
+except ImportError as e:
+    # Fallback если stealth не доступен
     stealth_async = None
+    print(f"⚠️  Playwright Stealth не установлен: {e}")
 
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
@@ -115,65 +120,13 @@ async def safe_screenshot(page, full_page: bool = False, timeout_ms: int = 10000
 
 
 async def detect_cloudflare_block(page) -> tuple[bool, str]:
-    """
-    Пытается определить, что страница — Cloudflare block/challenge или другие анти-бот системы.
-    Возвращает (blocked, signal) где signal — краткое описание индикаторов.
-    
-    УЛУЧШЕННАЯ ВЕРСИЯ: также проверяет наличие контента (пустая страница = блок)
-    """
-    try:
-        title = await page.title()
-        body_text = await page.evaluate("""() => {
-            try { return document.body ? document.body.innerText.slice(0, 4000) : ''; } catch(e) { return ''; }
-        }""")
-        
-        indicators = []
-        
-        # 🛡️ Признаки Cloudflare
-        if title and ("Attention Required" in title) and ("Cloudflare" in title):
-            indicators.append("title:Attention Required | Cloudflare")
-        if body_text:
-            if "Sorry, you have been blocked" in body_text:
-                indicators.append("text:blocked")
-            if "Cloudflare Ray ID" in body_text:
-                indicators.append("text:ray_id")
-            if "cf-challenge" in body_text or "cf-browser-verification" in body_text:
-                indicators.append("text:cf_challenge")
-        
-        # 🚫 Признак пустой страницы (может быть загрузка или блок)
-        # Пустая страница часто появляется при:
-        # - CORS ошибках
-        # - Блокировке браузера
-        # - Ошибке DNS
-        body_html = await page.evaluate("""() => {
-            try { return document.body ? document.body.innerHTML.length : 0; } catch(e) { return 0; }
-        }""")
-        
-        if body_html < 100 and not "temp-mail" in page.url.lower():  # Для temp-mail может быть динамическая загрузка
-            indicators.append(f"html_size:{body_html} (possible_block)")
-        
-        # ⏱️ Проверка на наличие iframe (часто используется для challenge)
-        iframes = await page.evaluate("""() => {
-            return document.querySelectorAll('iframe').length;
-        }""")
-        if iframes > 3:  # Более 3 iframe = вероятно challenge
-            indicators.append(f"iframes:{iframes}")
-        
-        blocked = len(indicators) > 0
-        return blocked, ", ".join(indicators)
-    except Exception as e:
-        print(f"  ⚠️  detect_cloudflare_block error: {e}")
-        return False, ""
+    """NO-OP: Cloudflare detection disabled by request."""
+    return False, ""
 
 
 def log_cloudflare_event(phase: str, step: int, action: str, url: str, signal: str):
-    try:
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logs_dir = Path("logs"); logs_dir.mkdir(exist_ok=True)
-        with open(logs_dir / "cloudflare_events.tsv", "a", encoding="utf-8") as f:
-            f.write(f"{ts}\t{phase}\t{step}\t{action}\t{url}\t{signal}\n")
-    except Exception:
-        pass
+    """NO-OP logger: disabled."""
+    return
 
 
 def save_registration_result(email: str, status: str, confirmed: bool, notes: str):
@@ -333,11 +286,41 @@ def get_custom_function_declarations():
     """
     return [
         FunctionDeclaration(
+            name="switch_to_mail_tab",
+            description=(
+                "Switch focus to the temp-mail.org tab. "
+                "Use this function when you need to interact with the email inbox "
+                "(e.g., to click on an email, read messages, or extract verification links). "
+                "After calling this, all subsequent actions (click, scroll, type) will be performed on the mail tab."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        FunctionDeclaration(
+            name="switch_to_airtable_tab",
+            description=(
+                "Switch focus to the Airtable registration tab. "
+                "Use this function when you need to interact with Airtable.com "
+                "(e.g., to fill the registration form, click buttons, navigate pages). "
+                "After calling this, all subsequent actions will be performed on the Airtable tab."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        FunctionDeclaration(
             name="extract_verification_link",
             description=(
                 "Extracts the email verification link from the current page. "
                 "Use this function when you are viewing an email on temp-mail.org "
                 "that contains an Airtable verification link. "
+                "IMPORTANT: You must call switch_to_mail_tab BEFORE this function "
+                "to ensure you are on the correct tab. "
                 "The function will parse the HTML and return the full verification URL. "
                 "You should call this AFTER opening the email from Airtable."
             ),
@@ -475,7 +458,7 @@ async def extract_email_from_tempmail_page(page) -> str:
 
 # ==================== ОБРАБОТЧИК TOOL CALLS ====================
 
-async def execute_computer_use_action(page, function_call: FunctionCall, screen_width: int, screen_height: int) -> dict:
+async def execute_computer_use_action(page, function_call: FunctionCall, screen_width: int, screen_height: int, page_mail=None, page_airtable=None) -> dict:
     """
     Выполняет действие Computer Use в браузере Playwright.
     
@@ -483,10 +466,12 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
     https://ai.google.dev/gemini-api/docs/computer-use
     
     Args:
-        page: Playwright Page объект
+        page: Playwright Page объект (текущая активная страница)
         function_call: FunctionCall от модели
         screen_width: Ширина экрана в пикселях
         screen_height: Высота экрана в пикселях
+        page_mail: (optional) Вкладка с temp-mail (для переключения)
+        page_airtable: (optional) Вкладка с Airtable (для переключения)
     
     Returns:
         dict с результатом выполнения
@@ -513,6 +498,46 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
             }
     
     try:
+        # ==================== ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК ====================
+        
+        if action == "switch_to_mail_tab":
+            if page_mail is None:
+                return {"success": False, "message": "Mail tab not available", "url": page.url}
+            # Переключаем вкладку на передний план
+            await page_mail.bring_to_front()
+            # Критически важно: ждём чтобы вкладка стала ВИДИМОЙ
+            # Computer Use API скриншотит ТЕКУЩУЮ видимую вкладку после получения response
+            try:
+                await page_mail.wait_for_load_state("domcontentloaded", timeout=5000)
+            except:
+                pass  # Страница уже загружена
+            await asyncio.sleep(1.0)  # Дополнительная пауза для полного рендеринга
+            print(f"  ✅ Переключились на вкладку temp-mail: {page_mail.url}")
+            return {
+                "success": True, 
+                "message": f"Switched to mail tab: {page_mail.url}",
+                "url": page_mail.url
+            }
+        
+        elif action == "switch_to_airtable_tab":
+            if page_airtable is None:
+                return {"success": False, "message": "Airtable tab not available", "url": page.url}
+            # Переключаем вкладку на передний план
+            await page_airtable.bring_to_front()
+            # Критически важно: ждём чтобы вкладка стала ВИДИМОЙ
+            # Computer Use API скриншотит ТЕКУЩУЮ видимую вкладку после получения response
+            try:
+                await page_airtable.wait_for_load_state("domcontentloaded", timeout=5000)
+            except:
+                pass  # Страница уже загружена
+            await asyncio.sleep(1.0)  # Дополнительная пауза для полного рендеринга
+            print(f"  ✅ Переключились на вкладку Airtable: {page_airtable.url}")
+            return {
+                "success": True, 
+                "message": f"Switched to Airtable tab: {page_airtable.url}",
+                "url": page_airtable.url
+            }
+        
         # ==================== НАВИГАЦИЯ ====================
         
         if action == "open_web_browser":
@@ -578,18 +603,7 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
                 except Exception as e:
                     print(f"  ⚠️  Ожидание селектора истекло ({str(e)[:50]}), но продолжаем...")
                 
-                # 🛡️ Проверка на Cloudflare блок
-                blocked, signal = await detect_cloudflare_block(page)
-                if blocked:
-                    print(f"  🛡️  Обнаружен Cloudflare блок: {signal}")
-                    log_cloudflare_event(phase="navigate", step=-1, action="navigate", url=page.url, signal=signal)
-                    # Ждём автоматического прохождения challenge
-                    print(f"  ⏳ Ждём прохождения Cloudflare (10 сек)...")
-                    await page.wait_for_timeout(10000)
-                    # Проверяем снова
-                    blocked, signal = await detect_cloudflare_block(page)
-                    if not blocked:
-                        print(f"  ✅ Cloudflare challenge пройден!")
+                # 🛡️ Cloudflare check отключен
                 
                 return {"success": True, "message": f"Перешел на {page.url}", "url": page.url}
                 
@@ -632,7 +646,7 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
             await page.mouse.move(actual_x, actual_y)
             await asyncio.sleep(0.5)  # Небольшая пауза для появления меню
             
-            return {"success": True, "message": f"Навел курсор на ({x}, {y}) → ({actual_x}, {actual_y})px"}
+            return {"success": True, "message": f"Навел курсор на ({x}, {y}) → ({actual_x}, {actual_y})px", "url": page.url}
         
         # ==================== ВВОД ТЕКСТА ====================
         
@@ -672,7 +686,7 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
             await page.keyboard.press(keys)
             await asyncio.sleep(0.5)
             
-            return {"success": True, "message": f"Нажал клавиши: {keys}"}
+            return {"success": True, "message": f"Нажал клавиши: {keys}", "url": page.url}
         
         # ==================== СКРОЛЛИНГ ====================
         
@@ -690,7 +704,7 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
                 await page.mouse.wheel(-scroll_amount, 0)
             
             await asyncio.sleep(0.5)
-            return {"success": True, "message": f"Прокрутил страницу {direction}"}
+            return {"success": True, "message": f"Прокрутил страницу {direction}", "url": page.url}
         
         elif action == "scroll_at":
             x = args.get("x", 0)
@@ -716,7 +730,7 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
                 await page.mouse.wheel(-actual_magnitude, 0)
             
             await asyncio.sleep(0.5)
-            return {"success": True, "message": f"Прокрутил элемент at ({x}, {y}) {direction} на {magnitude}"}
+            return {"success": True, "message": f"Прокрутил элемент at ({x}, {y}) {direction} на {magnitude}", "url": page.url}
         
         # ==================== DRAG & DROP ====================
         
@@ -739,7 +753,7 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
             await asyncio.sleep(0.2)
             await page.mouse.up()
             
-            return {"success": True, "message": f"Перетащил из ({x}, {y}) в ({dest_x}, {dest_y})"}
+            return {"success": True, "message": f"Перетащил из ({x}, {y}) в ({dest_x}, {dest_y})", "url": page.url}
         
         # ==================== ОЖИДАНИЕ ====================
         
@@ -833,18 +847,42 @@ async def run_computer_use_agent(task: str, max_steps: int = 20):
     SCREEN_WIDTH = 1440
     SCREEN_HEIGHT = 900
     
-    # Запускаем браузер Playwright
+    # Запускаем браузер Playwright с полной конфигурацией
     playwright = await async_playwright().start()
     browser = await playwright.chromium.launch(
         headless=False,  # Видим что происходит
-        args=['--start-maximized']
+        args=[
+            '--start-maximized',
+            '--disable-blink-features=AutomationControlled'
+        ]
     )
+    
+    # 🔧 КРИТИЧЕСКИ ВАЖНО: Полная конфигурация контекста
     context = await browser.new_context(
         viewport={'width': SCREEN_WIDTH, 'height': SCREEN_HEIGHT},
         locale='ru-RU',
-        timezone_id='Europe/Moscow'
+        timezone_id='Europe/Moscow',
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        extra_http_headers={
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        },
+        java_script_enabled=True,  # Явно включаем JS
     )
-    page = await context.new_page()
+    
+    # 🛡️ Применяем stealth для обхода детекции
+    if stealth_async:
+        print("🕵️  Применяем playwright-stealth...")
+        await stealth_async(context)
+    
+    # 🎯 ВАЖНО: Используем первую страницу вместо создания новой
+    pages = context.pages
+    if pages:
+        page = pages[0]
+        print(f"📄 Используем существующую вкладку (всего: {len(pages)})")
+    else:
+        page = await context.new_page()
+        print("📄 Создана новая вкладка")
     
     # Начальная страница
     await page.goto("about:blank")
@@ -1020,15 +1058,20 @@ async def run_email_extraction(max_steps: int = 15) -> Optional[str]:
     task = """
 MISSION: Extract temporary email address from temp-mail.org
 
+🎯 IMPORTANT: The page https://temp-mail.org/en/ is ALREADY OPEN!
+   - You can see it in the screenshot
+   - DO NOT navigate again - just work with current page
+
 YOUR TASK:
-  Get a temporary email address from https://temp-mail.org/en/ that will be used for Airtable registration.
+  Get the temporary email address from the current page (temp-mail.org).
 
 STEP-BY-STEP WORKFLOW:
-  1. Navigate to https://temp-mail.org/en/
+  1. ✅ Page is ALREADY open - check the screenshot
   
-  2. ⚠️ CRITICAL: WAIT 10 seconds after page loads
+  2. ⚠️ CRITICAL: WAIT 10 seconds for email to fully load
      - The email does NOT appear immediately!
      - Textbox shows "Loading..." at first, then email appears
+     - Use wait_5_seconds action TWICE (5s + 5s = 10s total)
   
   3. Extract email using the CUSTOM FUNCTION:
      ⭐ CALL: extract_email_from_page()
@@ -1045,6 +1088,7 @@ STEP-BY-STEP WORKFLOW:
 ANTI-LOOP RULES:
   - Maximum 3 attempts total
   - If extract_email_from_page() returns error → WAIT 5s and try again
+  - DO NOT navigate to temp-mail again (already there!)
   - DO NOT click random elements hoping to find email
 
 SUCCESS CHECK:
@@ -1052,6 +1096,7 @@ SUCCESS CHECK:
   ❌ Failed = Function returns ERROR
 
 REMEMBER:
+  - Page is ALREADY OPEN - don't navigate
   - ALWAYS use extract_email_from_page() function
   - DO NOT try to read visually from screenshot
   - STOP immediately after getting email
@@ -1086,15 +1131,50 @@ REMEMBER:
     SCREEN_WIDTH = 1440
     SCREEN_HEIGHT = 900
     
-    # Запускаем браузер
+    # Запускаем браузер с полной конфигурацией
     playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=False, args=['--start-maximized'])
+    browser = await playwright.chromium.launch(
+        headless=False, 
+        args=[
+            '--start-maximized',
+            '--disable-blink-features=AutomationControlled'
+        ]
+    )
+    
+    # 🔧 КРИТИЧЕСКИ ВАЖНО: Полная конфигурация контекста
     context = await browser.new_context(
         viewport={'width': SCREEN_WIDTH, 'height': SCREEN_HEIGHT},
-        locale='ru-RU'
+        locale='ru-RU',
+        timezone_id='Europe/Moscow',
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        extra_http_headers={
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        },
+        java_script_enabled=True,  # Явно включаем JS
     )
-    page = await context.new_page()
-    await page.goto("about:blank")
+    
+    # 🛡️ Применяем stealth для обхода детекции
+    if stealth_async:
+        print("🕵️  Применяем playwright-stealth...")
+        await stealth_async(context)
+    
+    # 🎯 ВАЖНО: Используем первую страницу вместо создания новой
+    # Chromium автоматически создает одну вкладку при запуске
+    pages = context.pages
+    if pages:
+        page = pages[0]  # Используем существующую вкладку
+        print(f"📄 Используем существующую вкладку (всего вкладок: {len(pages)})")
+    else:
+        page = await context.new_page()  # Создаем только если нет вкладок
+        print("📄 Создана новая вкладка")
+    
+    # 🎯 СРАЗУ ОТКРЫВАЕМ temp-mail.org вместо about:blank
+    # Это дает агенту уже готовую страницу для работы
+    print("🌐 Открываем начальную страницу temp-mail.org...")
+    await page.goto("https://temp-mail.org/en/", wait_until="domcontentloaded")
+    await page.wait_for_timeout(10000)  # Даем странице стабилизироваться
+    print("✅ Страница загружена, агент может начинать работу")
     
     history = []
     screenshot_bytes = await safe_screenshot(page, full_page=False, timeout_ms=10000)
@@ -1349,14 +1429,43 @@ FINAL OUTPUT:
     SCREEN_WIDTH = 1440
     SCREEN_HEIGHT = 900
     
-    # Запускаем браузер (новый для ШАГ 2)
+    # Запускаем браузер с полной конфигурацией (новый для ШАГ 2)
     playwright = await async_playwright().start()
-    browser = await playwright.chromium.launch(headless=False, args=['--start-maximized'])
+    browser = await playwright.chromium.launch(
+        headless=False, 
+        args=[
+            '--start-maximized',
+            '--disable-blink-features=AutomationControlled'
+        ]
+    )
+    
+    # 🔧 КРИТИЧЕСКИ ВАЖНО: Полная конфигурация контекста
     context = await browser.new_context(
         viewport={'width': SCREEN_WIDTH, 'height': SCREEN_HEIGHT},
-        locale='ru-RU'
+        locale='ru-RU',
+        timezone_id='Europe/Moscow',
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        extra_http_headers={
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        },
+        java_script_enabled=True,  # Явно включаем JS
     )
-    page = await context.new_page()
+    
+    # 🛡️ Применяем stealth для обхода детекции
+    if stealth_async:
+        print("🕵️  Применяем playwright-stealth...")
+        await stealth_async(context)
+    
+    # 🎯 ВАЖНО: Используем первую страницу вместо создания новой
+    pages = context.pages
+    if pages:
+        page = pages[0]
+        print(f"📄 Используем существующую вкладку (всего: {len(pages)})")
+    else:
+        page = await context.new_page()
+        print("📄 Создана новая вкладка")
+    
     await page.goto("about:blank")
     
     history = []
@@ -1561,13 +1670,7 @@ SUCCESS CHECK:
                 fc = part.function_call
                 result = await execute_computer_use_action(page, fc, SCREEN_WIDTH, SCREEN_HEIGHT)
                 # Cloudflare детект для каждого действия шага email
-                try:
-                    blocked, signal = await detect_cloudflare_block(page)
-                    if blocked:
-                        log_cloudflare_event(phase="email", step=step, action=fc.name, url=page.url, signal=signal)
-                        print(f"  🛡️  Cloudflare block (email step {step}) after {fc.name}: {signal}")
-                except Exception:
-                    pass
+                # Cloudflare check отключен
                 if fc.name == "extract_email_from_page" and result.get("success"):
                     extracted_email = result.get("email")
                     print(f"\n✅ EMAIL ПОЛУЧЕН (unified): {extracted_email}")
@@ -1608,37 +1711,43 @@ async def run_airtable_registration_on_pages(email: str, page_mail, page_airtabl
     Функцию extract_verification_link() выполняем на вкладке почты, а навигацию по verify URL — на вкладке Airtable.
     """
     task = f"""
-MISSION: Register on Airtable and confirm email (Unified two-tab flow)
+MISSION: Register on Airtable and confirm email (Two-tab workflow)
 
 YOUR EMAIL: {email}
 REGISTRATION URL: https://airtable.com/invite/r/ovoAP1zR
 
-WORKING TABS:
-  - This tab (current): Airtable actions ONLY
-  - Another tab (already open): temp-mail inbox (DO NOT CLOSE IT)
+YOU HAVE TWO BROWSER TABS AVAILABLE:
+  1. Airtable tab (currently active) - for registration
+  2. Temp-mail tab (already open) - for checking verification email
 
-CRITICAL STEPS:
-  1) In THIS tab, navigate to the invite URL and complete the signup:
+AVAILABLE TAB SWITCHING FUNCTIONS:
+  - switch_to_mail_tab() - switches to temp-mail inbox
+  - switch_to_airtable_tab() - switches to Airtable registration page
+
+CRITICAL WORKFLOW:
+  1) [AIRTABLE TAB - already active] Navigate to https://airtable.com/invite/r/ovoAP1zR and complete signup:
      - Email: {email}
-     - Full Name: realistic name (e.g., Maria Rodriguez)
+     - Full Name: Maria Rodriguez (or similar realistic name)
      - Password: SecurePass2024!
-     - Click Create account ONCE, wait 10s, check URL changed off /invite/
+     - Click "Create account" button ONCE
+     - Wait 10 seconds to see if URL changes from /invite/
 
-  2) Open temp-mail tab (keep it open) and wait up to 30s for the Airtable email.
-     - Refresh the inbox if necessary
-     - Open the Airtable email (subject like: Please confirm your email)
+  2) [SWITCH TO MAIL TAB] Use switch_to_mail_tab() to view the inbox
+     - Wait up to 30 seconds for Airtable email (subject: "Please confirm your email")
+     - Click on the email to open it
 
-  3) Call extract_verification_link() to get the full verification URL from the EMAIL CONTENT.
-     - DO NOT click the link visually
-     - We'll navigate to it from the Airtable tab
+  3) [MAIL TAB] Call extract_verification_link() to get the verification URL from email content
+     - This will return the full https://airtable.com/auth/verifyEmail/... URL
 
-  4) Switch BACK to THIS (Airtable) tab and navigate to the verification URL returned by the function.
-     - Wait 5-10s and verify success
+  4) [SWITCH TO AIRTABLE TAB] Use switch_to_airtable_tab() to go back
+     - Navigate to the verification URL using navigate(url=...)
+     - Wait 5-10 seconds and confirm success
 
-RULES:
-  - Never close the temp-mail tab
-  - Use extract_verification_link() only after opening the email
-  - Use navigate(url=...) in the Airtable tab for the verification URL
+IMPORTANT RULES:
+  - ALWAYS use switch_to_mail_tab() BEFORE clicking on emails or calling extract_verification_link()
+  - ALWAYS use switch_to_airtable_tab() BEFORE navigating to Airtable pages
+  - The mail tab must stay open throughout the entire process
+  - After switching tabs, ALL subsequent actions happen on that tab until you switch again
 """
 
     model_name = "gemini-2.5-computer-use-preview-10-2025"
@@ -1662,6 +1771,10 @@ RULES:
     }
 
     final_text = ""
+    
+    # Отслеживание текущей активной вкладки между шагами
+    # Начинаем с Airtable, т.к. это вкладка регистрации
+    current_active_page = page_airtable
 
     for step in range(1, max_steps + 1):
         print(f"\n{'=' * 70}")
@@ -1702,48 +1815,65 @@ RULES:
                 print(f"\n💭 Мысль модели:\n   {part.text[:400]}...")
                 final_text += part.text + "\n"
 
-        # Выполнение действий: extract_verification_link → page_mail; остальные → page_airtable
+        # Выполнение действий: switch_to_* меняет активную вкладку, остальные работают с текущей
+        # current_active_page хранится между шагами (определена выше цикла)
         tool_responses = []
+        
         for part in model_content.parts:
             if hasattr(part, 'function_call') and part.function_call:
                 fc = part.function_call
-                # Если требуется извлечь ссылку — выводим почтовую вкладку на передний план
-                if fc.name == "extract_verification_link":
+                
+                # Обработка switch_to_* функций меняет current_active_page
+                if fc.name == "switch_to_mail_tab":
+                    exec_result = await execute_computer_use_action(
+                        page_mail, fc, SCREEN_WIDTH, SCREEN_HEIGHT, 
+                        page_mail=page_mail, page_airtable=page_airtable
+                    )
+                    current_active_page = page_mail  # Теперь активна почта
+                    tool_responses.append(Part(function_response=FunctionResponse(name=fc.name, response=exec_result)))
+                    
+                elif fc.name == "switch_to_airtable_tab":
+                    exec_result = await execute_computer_use_action(
+                        page_airtable, fc, SCREEN_WIDTH, SCREEN_HEIGHT, 
+                        page_mail=page_mail, page_airtable=page_airtable
+                    )
+                    current_active_page = page_airtable  # Теперь активен Airtable
+                    tool_responses.append(Part(function_response=FunctionResponse(name=fc.name, response=exec_result)))
+                    
+                elif fc.name == "extract_verification_link":
+                    # Явно переключаемся на почту для извлечения ссылки
                     await page_mail.bring_to_front()
-                    target_page = page_mail
+                    current_active_page = page_mail
+                    exec_result = await execute_computer_use_action(
+                        page_mail, fc, SCREEN_WIDTH, SCREEN_HEIGHT,
+                        page_mail=page_mail, page_airtable=page_airtable
+                    )
+                    tool_responses.append(Part(function_response=FunctionResponse(name=fc.name, response=exec_result)))
+                    
                 else:
-                    await page_airtable.bring_to_front()
-                    target_page = page_airtable
-                exec_result = await execute_computer_use_action(target_page, fc, SCREEN_WIDTH, SCREEN_HEIGHT)
-                # Cloudflare детект для каждого действия шага регистрации
-                try:
-                    blocked, signal = await detect_cloudflare_block(target_page)
-                    if blocked:
-                        log_cloudflare_event(phase="registration", step=step, action=fc.name, url=target_page.url, signal=signal)
-                        print(f"  🛡️  Cloudflare block (registration step {step}) after {fc.name}: {signal}")
-                except Exception:
-                    pass
-                tool_responses.append(Part(function_response=FunctionResponse(name=fc.name, response=exec_result)))
+                    # Все остальные действия выполняем на текущей активной вкладке
+                    exec_result = await execute_computer_use_action(
+                        current_active_page, fc, SCREEN_WIDTH, SCREEN_HEIGHT,
+                        page_mail=page_mail, page_airtable=page_airtable
+                    )
+                    tool_responses.append(Part(function_response=FunctionResponse(name=fc.name, response=exec_result)))
 
         history.append(model_content)
 
         if tool_responses:
-            # Скриншот с актуальной вкладки: если последним был extract_verification_link — берём с почтовой
-            last_name = None
-            for tr in tool_responses[::-1]:
-                try:
-                    last_name = tr.function_response.name
-                    break
-                except Exception:
-                    pass
-            if last_name == "extract_verification_link":
-                shot_page = page_mail
-            else:
-                shot_page = page_airtable
-            screenshot_bytes = await safe_screenshot(shot_page, full_page=False, timeout_ms=10000)
+            # ВАЖНО: При работе с множественными вкладками Computer Use API не может автоматически
+            # определить какую вкладку скриншотить. Нужно ВРУЧНУЮ добавить скриншот текущей активной вкладки!
+            
+            # Убедимся что current_active_page действительно на переднем плане
+            await current_active_page.bring_to_front()
+            await asyncio.sleep(0.3)  # Небольшая пауза для рендеринга
+            
+            screenshot_bytes = await safe_screenshot(current_active_page, full_page=False, timeout_ms=10000)
             parts = tool_responses.copy()
             if screenshot_bytes:
                 parts.append(Part(inline_data=Blob(mime_type="image/png", data=screenshot_bytes)))
+            else:
+                print("  ⚠️  Не удалось сделать скриншот текущей вкладки!")
             history.append(Content(role="user", parts=parts))
 
         # Оценка состояния по тексту
@@ -1806,65 +1936,88 @@ async def main_airtable_registration_unified():
     SCREEN_WIDTH = 1440
     SCREEN_HEIGHT = 900
 
-    # Один браузер, два таба (persistent profile)
+    # Один браузер, две вкладки. По умолчанию БЕЗ persistent (совпадает с успешно пройденными тестами).
+    # Включить persistent можно переменной окружения AS_USE_PERSISTENT=1
     playwright = await async_playwright().start()
-    # Конфигурируем user_data_dir для постоянного профиля
-    user_data_dir = os.getenv("PLAYWRIGHT_USER_DATA_DIR") or os.getenv("BROWSER_USE_USER_DATA_DIR")
-    if not user_data_dir:
-        user_data_dir = str(Path.cwd() / "profiles" / "unified_default")
-    Path(user_data_dir).mkdir(parents=True, exist_ok=True)
-
-    print(f"🗂️  Профиль браузера: {user_data_dir}")
-
-    # 🕵️ Маскировка браузера от bot-detection
-    context = await playwright.chromium.launch_persistent_context(
-        user_data_dir=user_data_dir,
-        headless=False,
-        viewport={'width': SCREEN_WIDTH, 'height': SCREEN_HEIGHT},
-        locale='ru-RU',
-        timezone_id='Europe/Moscow',
-        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        extra_http_headers={
-            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Cache-Control': 'max-age=0',
-        },
-        args=['--start-maximized', '--disable-blink-features=AutomationControlled']
-    )
+    use_persistent = os.getenv('AS_USE_PERSISTENT', '0') == '1'
+    if use_persistent:
+        user_data_dir = os.getenv("PLAYWRIGHT_USER_DATA_DIR") or os.getenv("BROWSER_USE_USER_DATA_DIR")
+        if not user_data_dir:
+            user_data_dir = str(Path.cwd() / "profiles" / "unified_default")
+        Path(user_data_dir).mkdir(parents=True, exist_ok=True)
+        print(f"🗂️  Профиль браузера (persistent): {user_data_dir}")
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=False,
+            viewport={'width': SCREEN_WIDTH, 'height': SCREEN_HEIGHT},
+            locale='ru-RU',
+            timezone_id='Europe/Moscow',
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            extra_http_headers={
+                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Cache-Control': 'max-age=0',
+            },
+            args=['--start-maximized', '--disable-blink-features=AutomationControlled']
+        )
+    else:
+        print("🗂️  Режим без persistent профиля (как в тестах)")
+        browser = await playwright.chromium.launch(
+            headless=False,
+            args=['--start-maximized', '--disable-blink-features=AutomationControlled']
+        )
+        context = await browser.new_context(
+            viewport={'width': SCREEN_WIDTH, 'height': SCREEN_HEIGHT},
+            locale='ru-RU',
+            timezone_id='Europe/Moscow',
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            extra_http_headers={
+                'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Cache-Control': 'max-age=0',
+            },
+        )
 
     # ✅ Применяем stealth для обхода Cloudflare и других систем обнаружения
     if stealth_async:
+        # ✅ ИСПРАВЛЕНО: В playwright-stealth 2.0.0 метод принимает context
         await stealth_async(context)
         print("🕵️ Stealth mode активирован (обход Cloudflare и bot-detection)")
     else:
         print("⚠️  Stealth mode недоступен (playwright_stealth не установлен правильно)")
+        print("   💡 Установите: pip install playwright-stealth")
     
-    # 🎭 Установка Human-like headers для маскировки (дополнительный обход)
+    # 🎭 Установка Sec-Fetch-* headers (как в working test)
     await context.set_extra_http_headers({
         'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
         'Sec-Fetch-Dest': 'document',
         'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-Site': 'none',
         'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
     })
-    print("🎭 Human-like headers установлены (обход детектирования браузера)")
+    print("🎭 Sec-Fetch-* headers установлены (точно как в working test)")
 
-    # Вкладка почты (первая)
+    # === Управление вкладками: СТАРТУЕМ С ОДНОЙ (почта), вторую создадим ПОТОМ ===
+    # В persistent-профиле Chromium может восстановить сессию и открыть несколько about:blank
+    # Чтобы исключить это, закрываем все текущие и создаём заново 1 предсказуемую вкладку
+    existing = list(context.pages)
+    print(f"🧭 Вкладок сразу после старта: {len(existing)} → закрываю все и создаю 1 (почта)")
+    for p in existing:
+        try:
+            await p.close()
+        except Exception:
+            pass
+
+    # Создаём ровно одну вкладку: для почты (temp-mail)
     page_mail = await context.new_page()
-    await page_mail.goto("about:blank")
-
-    # Вкладка Airtable (вторая)
-    page_airtable = await context.new_page()
-    await page_airtable.goto("about:blank")
+    if page_mail.url == "" or not page_mail.url:
+        await page_mail.goto("about:blank")
+    print(f"📄 Текущих вкладок: {len(context.pages)} (только mail)")
 
     try:
-        # ШАГ 1: получаем email на вкладке почты
+    # ШАГ 1: получаем email на вкладке почты (вкладка почты остаётся открытой)
         print("\n📧 ШАГ 1: Получение временного email (вкладка почты остаётся открытой)...")
         email = await run_email_extraction_on_page(page_mail, client, config, max_steps=15)
 
@@ -1874,6 +2027,12 @@ async def main_airtable_registration_unified():
             return
 
         print(f"\n✅ Email получен: {email}")
+
+        # Только теперь создаём вторую вкладку под Airtable
+        page_airtable = await context.new_page()
+        if page_airtable.url == "" or not page_airtable.url:
+            await page_airtable.goto("about:blank")
+        print(f"🪟 Открыта вторая вкладка для Airtable. Всего вкладок: {len(context.pages)}")
 
         # ШАГ 2: регистрация на Airtable с использованием двух вкладок
         print("\n📝 ШАГ 2: Регистрация на Airtable (почта не закрывается)...")

@@ -1,0 +1,7 @@
+2025-10-17 08:26:44	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-17 08:27:03	navigate	-1	navigate	https://temp-mail.org/en/	iframes:4
+2025-10-17 08:27:13	email	2	navigate	https://temp-mail.org/en/	iframes:24
+2025-10-17 08:27:24	email	3	wait_5_seconds	https://temp-mail.org/en/	iframes:24
+2025-10-17 08:27:36	email	4	wait_5_seconds	https://temp-mail.org/en/	iframes:24
+2025-10-17 08:27:45	email	5	extract_email_from_page	https://temp-mail.org/en/	iframes:24
+2025-10-17 08:27:48	registration	1	open_web_browser	about:blank	html_size:0 (possible_block)

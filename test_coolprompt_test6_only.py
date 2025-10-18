@@ -21,8 +21,7 @@ with SuppressOutput():
     nltk.download('punkt_tab', quiet=True) 
     nltk.download('omw-1.4', quiet=True)
 
-API_KEY = "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"
-os.environ["OPENAI_API_KEY"] = API_KEY
+API_KEY = os.environ.get("OPENAI_API_KEY", "your-api-key-here")
 
 print("=" * 70)
 print("ТЕСТ 6: ПРОДВИНУТАЯ КОНФИГУРАЦИЯ (исправленный)")

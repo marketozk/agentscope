@@ -32,10 +32,8 @@ with SuppressNLTKDownload():
     except:
         pass  # Уже установлены
 
-# API ключ OpenAI
-API_KEY = "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"
-
-os.environ["OPENAI_API_KEY"] = API_KEY
+# API ключ OpenAI (из переменных окружения)
+API_KEY = os.environ.get("OPENAI_API_KEY", "your-api-key-here")
 
 def test_basic_prompt_optimization():
     """Тест 1: Базовая оптимизация промпта"""

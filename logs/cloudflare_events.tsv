@@ -4,3 +4,26 @@
 2025-10-17 03:36:50	email	3	navigate	https://temp-mail.org/en/	title:Attention Required | Cloudflare, text:blocked, text:ray_id
 2025-10-17 03:46:41	navigate	-1	navigate	https://temp-mail.org/en/	title:Attention Required | Cloudflare, text:blocked, text:ray_id
 2025-10-17 03:46:41	email	2	navigate	https://temp-mail.org/en/	title:Attention Required | Cloudflare, text:blocked, text:ray_id
+2025-10-17 20:39:58	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-17 20:40:24	navigate	-1	navigate	https://temp-mail.org/en/	title:Attention Required | Cloudflare, text:blocked, text:ray_id
+2025-10-17 20:40:34	email	2	navigate	https://temp-mail.org/en/	title:Attention Required | Cloudflare, text:blocked, text:ray_id
+2025-10-18 21:37:35	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-18 21:47:18	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-18 21:47:39	email	3	wait_5_seconds	https://temp-mail.org/en/	iframes:24
+2025-10-18 21:47:52	email	4	wait_5_seconds	https://temp-mail.org/en/	iframes:24
+2025-10-18 21:48:15	email	5	extract_email_from_page	https://temp-mail.org/en/	iframes:4
+2025-10-18 22:03:30	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-18 22:03:40	navigate	-1	navigate	https://temp-mail.org/en/	iframes:4
+2025-10-18 22:03:50	email	2	navigate	https://temp-mail.org/en/	iframes:25
+2025-10-18 22:04:02	email	3	wait_5_seconds	https://temp-mail.org/en/	iframes:25
+2025-10-18 22:06:15	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-18 22:10:32	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-18 22:16:29	email	1	open_web_browser	about:blank	html_size:0 (possible_block)
+2025-10-18 22:16:37	navigate	-1	navigate	https://temp-mail.org/en/	iframes:5
+2025-10-18 22:16:47	email	2	navigate	https://temp-mail.org/en/	iframes:25
+2025-10-18 22:16:58	email	3	wait_5_seconds	https://temp-mail.org/ru/	iframes:17
+2025-10-18 22:17:08	navigate	-1	navigate	https://temp-mail.org/en/	iframes:5
+2025-10-18 22:17:18	email	4	navigate	https://temp-mail.org/en/	iframes:26
+2025-10-18 22:17:32	email	5	wait_5_seconds	https://temp-mail.org/en/	iframes:26
+2025-10-18 22:17:57	email	6	extract_email_from_page	https://temp-mail.org/en/	iframes:26
+2025-10-18 22:18:00	registration	1	open_web_browser	about:blank	html_size:0 (possible_block)

@@ -1,0 +1,11 @@
+# Установка CoolPrompt и зависимостей
+
+# Основная библиотека
+pip install coolprompt
+
+# LangChain для работы с OpenAI
+pip install langchain-openai
+
+# Дополнительные зависимости (если нужны)
+pip install langchain
+pip install openai

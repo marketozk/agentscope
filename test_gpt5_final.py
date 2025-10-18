@@ -3,9 +3,10 @@
 """
 import requests
 import json
+import os
 
-# API ключ
-API_KEY = "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"
+# API ключ (из переменных окружения)
+API_KEY = os.environ.get("OPENAI_API_KEY", "your-api-key-here")
 
 def test_gpt5_pro_via_responses_correct():
     """Тестирование GPT-5 Pro через v1/responses с правильным параметром 'input'"""
