@@ -1334,7 +1334,7 @@ async def run_airtable_registration(email: str, max_steps: int = 35) -> dict:
 MISSION: Register on Airtable and confirm email
 
 YOUR EMAIL: {email}
-REGISTRATION URL: https://airtable.com/invite/r/ovoAP1zR
+REGISTRATION URL: https://airtable.com/invite/r/LzgpVACU
 
 YOUR TASK:
   Complete full Airtable registration using the email above, including email verification.
@@ -1342,7 +1342,7 @@ YOUR TASK:
 CRITICAL WORKFLOW:
   📝 PHASE 1: AIRTABLE REGISTRATION FORM
   -------------------------------------------
-  STEP 1: Navigate to https://airtable.com/invite/r/ovoAP1zR
+  STEP 1: Navigate to https://airtable.com/invite/r/LzgpVACU
   
   STEP 2: WAIT 5 seconds for form to load
   
@@ -1772,7 +1772,7 @@ MISSION: Register on Airtable and confirm email (Two-tab workflow)
 YOUR EMAIL: {email}
 YOUR FULL NAME: {full_name}
 YOUR PASSWORD: {password}
-REGISTRATION URL: https://airtable.com/invite/r/ovoAP1zR
+REGISTRATION URL: https://airtable.com/invite/r/LzgpVACU
 
 YOU HAVE TWO BROWSER TABS AVAILABLE:
   1. Airtable tab (currently active) - for registration
@@ -1782,8 +1782,8 @@ AVAILABLE TAB SWITCHING FUNCTIONS:
   - switch_to_mail_tab() - switches to temp-mail inbox
   - switch_to_airtable_tab() - switches to Airtable registration page
 
-CRITICAL WORKFLOW:
-  1) [AIRTABLE TAB - already active] Navigate to https://airtable.com/invite/r/ovoAP1zR and complete signup:
+CRITICAL WORKFLOW (MUST COMPLETE ALL STEPS):
+  1) [AIRTABLE TAB - already active] Navigate to https://airtable.com/invite/r/LzgpVACU and complete signup:
      - Email: {email}
      - Full Name: {full_name}
      - Password: {password}
@@ -1792,20 +1792,44 @@ CRITICAL WORKFLOW:
 
   2) [SWITCH TO MAIL TAB] Use switch_to_mail_tab() to view the inbox
      - Wait up to 30 seconds for Airtable email (subject: "Please confirm your email")
+     - If email not visible, wait and refresh
      - Click on the email to open it
+     - ⚠️ If click fails with timeout - TRY AGAIN! Wait 3 seconds and retry
+     - ⚠️ If screenshot fails - CONTINUE ANYWAY! Try next action
 
   3) [MAIL TAB] Call extract_verification_link() to get the verification URL from email content
      - This will return the full https://airtable.com/auth/verifyEmail/... URL
+     - If extraction fails - try clicking email again and retry
 
   4) [SWITCH TO AIRTABLE TAB] Use switch_to_airtable_tab() to go back
      - Navigate to the verification URL using navigate(url=...)
-     - Wait 5-10 seconds and confirm success
+     - ⚠️ IMPORTANT: After navigation to verification URL, system will AUTO-WAIT 10 seconds
+     - Email verification happens AUTOMATICALLY - just wait, don't look for confirmation
+     - After 10 seconds, onboarding questions will appear automatically
+     - You can then say task complete - onboarding will be handled separately
+
+CRITICAL SUCCESS CRITERIA (DO NOT STOP UNTIL ALL ARE MET):
+  ✅ MUST: Email verification link extracted from mail
+  ✅ MUST: Navigated to verification URL on Airtable tab
+  ✅ AFTER navigation to verification URL - task is COMPLETE (10 sec auto-wait will happen)
+  ❌ You DON'T need to confirm verification manually - it's automatic
+  ❌ You DON'T need to handle onboarding questions - separate process will do it
+
+HANDLING ERRORS - VERY IMPORTANT:
+  ⚠️ If action fails with timeout - RETRY at least 2-3 times
+  ⚠️ If screenshot fails - IGNORE and continue with next action
+  ⚠️ If click doesn't work - try clicking slightly different coordinates
+  ⚠️ If page doesn't load - wait 5 seconds and try again
+  ❌ NEVER say "task complete" unless ALL critical steps are verified
+  ❌ NEVER stop if verification link not extracted yet
+  ❌ NEVER stop if email not confirmed yet
 
 IMPORTANT RULES:
   - ALWAYS use switch_to_mail_tab() BEFORE clicking on emails or calling extract_verification_link()
   - ALWAYS use switch_to_airtable_tab() BEFORE navigating to Airtable pages
   - The mail tab must stay open throughout the entire process
   - After switching tabs, ALL subsequent actions happen on that tab until you switch again
+  - BE PERSISTENT - retry failed actions, don't give up after first error
 """
 
     model_name = "gemini-2.5-computer-use-preview-10-2025"
@@ -1825,7 +1849,9 @@ IMPORTANT RULES:
         "status": "unknown",
         "email": email,
         "confirmed": False,
-        "notes": ""
+        "notes": "",
+        "verification_link_extracted": False,
+        "navigated_to_verification": False
     }
 
     final_text = ""
@@ -1906,7 +1932,31 @@ IMPORTANT RULES:
                         page_mail, fc, SCREEN_WIDTH, SCREEN_HEIGHT,
                         page_mail=page_mail, page_airtable=page_airtable
                     )
+                    # Отмечаем что ссылка успешно извлечена
+                    if exec_result.get("success") and exec_result.get("url"):
+                        result["verification_link_extracted"] = True
+                        print(f"  ✅ Ссылка верификации извлечена: {exec_result.get('url')[:50]}...")
                     tool_responses.append(Part(function_response=FunctionResponse(name=fc.name, response=exec_result)))
+                    
+                elif fc.name == "navigate":
+                    # Выполняем навигацию
+                    exec_result = await execute_computer_use_action(
+                        current_active_page, fc, SCREEN_WIDTH, SCREEN_HEIGHT,
+                        page_mail=page_mail, page_airtable=page_airtable
+                    )
+                    tool_responses.append(Part(function_response=FunctionResponse(name=fc.name, response=exec_result)))
+                    
+                    # Если это навигация по ссылке верификации - отмечаем и ждем 10 секунд
+                    if result["verification_link_extracted"] and exec_result.get("success"):
+                        url = fc.args.get("url", "")
+                        if "verifyEmail" in url or "verify" in url.lower():
+                            result["navigated_to_verification"] = True
+                            print("  ✅ Переход по ссылке верификации выполнен")
+                            print("  ⏳ Ожидание 10 секунд (автоматическая верификация + загрузка onboarding)...")
+                            await asyncio.sleep(10)
+                            print("  ✅ Верификация завершена, готово к onboarding")
+                            # Автоматически считаем email подтвержденным
+                            result["confirmed"] = True
                     
                 else:
                     # Все остальные действия выполняем на текущей активной вкладке
@@ -1938,16 +1988,61 @@ IMPORTANT RULES:
         lower = final_text.lower()
         if "registration successful" in lower or "account created" in lower:
             result["status"] = "success"
-        if "email confirmed" in lower or "email verified" in lower:
+        if "email confirmed" in lower or "email verified" in lower or "verification successful" in lower:
             result["confirmed"] = True
         if "failed" in lower or "error" in lower:
             result["status"] = "failed"
+        
+        # Проверяем что модель перешла по ссылке верификации
+        if "navigate" in [p.function_call.name for p in model_content.parts if hasattr(p, 'function_call') and p.function_call]:
+            if result["verification_link_extracted"]:
+                result["navigated_to_verification"] = True
+                print("  ✅ Переход по ссылке верификации выполнен")
 
-        # Завершение, если модель перестала делать вызовы
+        # Завершение ТОЛЬКО если выполнены критические шаги
         if not has_tool_calls and final_text.strip():
-            print("\n✅ ЗАДАЧА ЗАВЕРШЕНА (unified)")
-            result["notes"] = final_text[:400]
-            break
+            # Проверяем критические критерии
+            critical_steps_completed = (
+                result["verification_link_extracted"] and 
+                result["navigated_to_verification"]
+            )
+            
+            if critical_steps_completed:
+                print("\n✅ ЗАДАЧА ЗАВЕРШЕНА (unified) - все критические шаги выполнены")
+                result["notes"] = final_text[:400]
+                break
+            else:
+                # Модель пытается завершиться, но критические шаги не выполнены
+                missing_steps = []
+                if not result["verification_link_extracted"]:
+                    missing_steps.append("извлечение ссылки верификации")
+                if not result["navigated_to_verification"]:
+                    missing_steps.append("переход по ссылке верификации")
+                
+                print(f"\n⚠️  Модель хочет завершиться, но НЕ выполнены: {', '.join(missing_steps)}")
+                print(f"   Продолжаем выполнение... (шаг {step}/{max_steps})")
+                
+                # Добавляем напоминание модели
+                reminder = f"""
+⚠️ CRITICAL REMINDER: Task is NOT complete yet!
+
+Missing steps:
+{chr(10).join(f'  ❌ {step}' for step in missing_steps)}
+
+You MUST complete these steps:
+1. Switch to mail tab (switch_to_mail_tab)
+2. Click on the Airtable verification email
+3. Extract verification link (extract_verification_link)
+4. Switch to Airtable tab (switch_to_airtable_tab)
+5. Navigate to the verification URL (navigate)
+
+After step 5, the system will AUTO-WAIT 10 seconds and task will be complete.
+
+DO NOT SAY "task complete" until you've done navigate() to the verification URL!
+Continue with the next action now.
+"""
+                history.append(Content(role="user", parts=[Part(text=reminder)]))
+                continue
 
     # Скриншот итогового состояния Airtable
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1973,63 +2068,148 @@ async def run_airtable_onboarding(page_airtable, client, config, max_steps: int 
     - Размер команды
     - Тип таблиц которые нужны
     - Шаблоны для начала работы
+    - Создание первой базы
+    - Настройка первой таблицы
+    - Tutorial/tour по функциям
     - И другие настройки
     
     Args:
         page_airtable: Playwright page объект для Airtable
         client: Google AI client
         config: Конфигурация для модели
-        max_steps: Максимальное количество шагов (10 для onboarding)
+        max_steps: Максимальное количество шагов (по умолчанию 10 для полного onboarding)
     
     Returns:
         dict с результатом: {status, completed_steps, notes}
     """
-    task = """
-MISSION: Complete Airtable onboarding setup (5-6 steps)
+    
+    # Генерируем случайные значения для onboarding
+    import random
+    
+    use_cases = [
+        "Project Management", "Content Planning", "Product Development", 
+        "Event Planning", "CRM", "Inventory Tracking", "Task Management",
+        "Marketing Campaigns", "Product Roadmap", "Team Collaboration"
+    ]
+    
+    team_sizes = ["Just me", "2-10 people", "11-50 people", "51-200 people"]
+    
+    roles = [
+        "Product Manager", "Developer", "Marketing", "Designer", "Operations",
+        "Sales", "HR", "Finance", "Customer Success", "Founder", "Consultant"
+    ]
+    
+    companies = [
+        "TechCorp", "InnovateLab", "Digital Solutions", "Creative Studio",
+        "StartupHub", "DataWorks", "CloudTech", "AppFactory", "WebStudio",
+        "SoftwarePro", "DevTeam", "AgileWorks", "SmartSystems"
+    ]
+    
+    industries = [
+        "Technology", "Marketing", "Healthcare", "Finance", "Education",
+        "E-commerce", "Media", "Real Estate", "Consulting", "Manufacturing"
+    ]
+    
+    teams = [
+        "Engineering", "Marketing", "Product", "Design", "Operations",
+        "Sales", "Support", "HR", "Finance", "Research"
+    ]
+    
+    workspace_names = [
+        "My Workspace", "Project Hub", "Team Base", "Work Central",
+        "Productivity Hub", "Task Center", "Collaboration Space", "Main Workspace"
+    ]
+    
+    # Выбираем случайные значения
+    random_use_case = random.choice(use_cases)
+    random_team_size = random.choice(team_sizes)
+    random_role = random.choice(roles)
+    random_company = random.choice(companies)
+    random_industry = random.choice(industries)
+    random_team = random.choice(teams)
+    random_workspace = random.choice(workspace_names)
+    
+    print(f"  🎲 Случайные значения для onboarding:")
+    print(f"     - Use case: {random_use_case}")
+    print(f"     - Company: {random_company}")
+    print(f"     - Industry: {random_industry}")
+    print(f"     - Team: {random_team}")
+    print(f"     - Team size: {random_team_size}")
+    print(f"     - Role: {random_role}")
+    print(f"     - Workspace: {random_workspace}")
+    
+    task = f"""
+MISSION: Complete FULL Airtable onboarding setup (up to 10 steps)
 
 CONTEXT: You have successfully registered and verified email on Airtable.
-Now you need to complete the initial setup wizard/onboarding process.
+Now you need to complete the ENTIRE initial setup wizard/onboarding process.
 
 YOUR TASK:
-  Go through the onboarding questions and complete setup steps.
+  Go through ALL onboarding questions and complete ALL setup steps until you reach the main workspace.
 
-TYPICAL AIRTABLE ONBOARDING QUESTIONS (answer naturally):
+TYPICAL AIRTABLE ONBOARDING FLOW (complete ALL steps):
   
   1️⃣ "What will you use Airtable for?" / "How do you plan to use Airtable?"
-     → Select any option: "Project Management", "Content Planning", "Product Development", etc.
-     → Or type: "Project tracking and team collaboration"
+     → Answer: "{random_use_case}"
   
-  2️⃣ "How big is your team?" / "Team size?"
-     → Select: "Just me" or "2-10 people"
+  2️⃣ "First, where do you work?" / "Company name?"
+     → Answer: "{random_company}"
   
-  3️⃣ "What role best describes you?"
-     → Select: "Product Manager", "Developer", "Marketing", or any role
+  3️⃣ "What industry is your company in?"
+     → Answer: "{random_industry}"
   
-  4️⃣ "Would you like to start with a template?"
-     → You can select "Start from scratch" or choose any template
+  4️⃣ "Which team are you on?" / "What team?"
+     → Answer: "{random_team}"
   
-  5️⃣ "Create your first base" / "Name your workspace"
-     → Enter name: "My Workspace" or "Project Hub"
+  5️⃣ "How big is your team?" / "Team size?"
+     → Answer: "{random_team_size}"
   
-  6️⃣ Any additional setup prompts
-     → Complete them naturally by clicking "Next", "Continue", "Skip" or providing simple answers
+  6️⃣ "What role best describes you?"
+     → Answer: "{random_role}"
+  
+  7️⃣ "Would you like to start with a template?"
+     → Select "Start from scratch" or choose any template
+  
+  8️⃣ "Create your first base" / "Name your workspace"
+     → Answer: "{random_workspace}"
+  
+  9️⃣ "Add tables to your base"
+     → Create or confirm table names (use default or type: "Tasks", "Projects")
+  
+  🔟 "Add fields to your table"
+     → Add or confirm field types (use defaults or add: Text, Number, Date, etc.)
+  
+  1️⃣1️⃣ Tutorial/Tour prompts ("Let's show you around", "Take a tour")
+     → Complete the tour OR click "Skip tour" to skip it
+  
+  1️⃣2️⃣ "Invite team members" / "Share your workspace"
+     → Click "Skip" or "Maybe later" to skip invitations
+  
+  1️⃣3️⃣ Additional setup steps
+     → Complete any remaining prompts until you reach the main workspace
 
 IMPORTANT RULES:
-  ✓ Answer questions naturally and quickly
-  ✓ Don't overthink - any reasonable answer is fine
+  ✓ Complete ALL steps - don't stop early!
+  ✓ Use the EXACT values specified above (in curly braces) for each question
+  ✓ Type or select the specified answers - don't make up different values
+  ✓ If you need to type text, use the exact value shown (e.g., "{random_company}", "{random_workspace}")
+  ✓ If you need to select from options, choose the closest match to the specified value
   ✓ Click "Next", "Continue", "Get Started", "Skip" buttons to progress
-  ✓ If you see "Skip tour" or "Skip tutorial" - you can skip it
-  ✓ Goal is to reach the main Airtable workspace/dashboard
-  ✓ Complete 5-6 steps total (don't need to do everything perfectly)
-  ✓ STOP when you see the main workspace with tables/bases
+  ✓ If you see "Skip tour" or "Skip tutorial" - you can skip it to save time
+  ✓ Goal is to reach the main Airtable workspace/dashboard WITH a created base
+  ✓ Complete up to 10 steps total to ensure FULL onboarding is done
+  ✓ STOP ONLY when you see the main workspace with your created base/table visible
 
-SUCCESS INDICATORS:
-  ✅ You see main Airtable interface with workspace
-  ✅ URL contains "/workspace" or shows base/table view
-  ✅ Onboarding wizard is no longer visible
-  ✅ You can see navigation menu, workspace name, or "Create" buttons
+SUCCESS INDICATORS (when to stop):
+  ✅ You see main Airtable interface with your created workspace/base
+  ✅ URL contains "/workspace" or shows base/table view (e.g., /tblXXXX)
+  ✅ Onboarding wizard is no longer visible - no more setup questions
+  ✅ You can see your base name and table(s) you created
+  ✅ You can see navigation menu, workspace name, "Create" buttons, table grid
+  ✅ Page looks like a functional Airtable workspace, not a setup wizard
 
-REMEMBER: This is just setup - be quick and practical!
+REMEMBER: Complete ALL onboarding steps - up to 10 total!
+Be thorough but efficient. The goal is a FULLY configured workspace.
 """
 
     model_name = "gemini-2.5-computer-use-preview-10-2025"
@@ -2284,7 +2464,7 @@ async def main_airtable_registration_unified():
         # ШАГ 3: Onboarding - проходим дополнительные шаги настройки
         if result.get('status') in ['success', 'unknown'] and result.get('confirmed', False):
             print("\n" + "=" * 70)
-            print("🎯 ШАГ 3: Прохождение onboarding (5-6 дополнительных шагов)")
+            print("🎯 ШАГ 3: Прохождение onboarding (до 10 дополнительных шагов)")
             print("=" * 70)
             print("💡 Цель: Ответить на вопросы Airtable и завершить начальную настройку")
             
