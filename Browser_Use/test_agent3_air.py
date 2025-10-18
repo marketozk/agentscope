@@ -1964,6 +1964,169 @@ IMPORTANT RULES:
     return result
 
 
+async def run_airtable_onboarding(page_airtable, client, config, max_steps: int = 10) -> dict:
+    """
+    ШАГ 3 (дополнительный): Прохождение onboarding после регистрации на Airtable.
+    
+    После успешной регистрации и верификации email, Airtable показывает серию вопросов:
+    - Для чего нужен Airtable (цель использования)
+    - Размер команды
+    - Тип таблиц которые нужны
+    - Шаблоны для начала работы
+    - И другие настройки
+    
+    Args:
+        page_airtable: Playwright page объект для Airtable
+        client: Google AI client
+        config: Конфигурация для модели
+        max_steps: Максимальное количество шагов (10 для onboarding)
+    
+    Returns:
+        dict с результатом: {status, completed_steps, notes}
+    """
+    task = """
+MISSION: Complete Airtable onboarding setup (5-6 steps)
+
+CONTEXT: You have successfully registered and verified email on Airtable.
+Now you need to complete the initial setup wizard/onboarding process.
+
+YOUR TASK:
+  Go through the onboarding questions and complete setup steps.
+
+TYPICAL AIRTABLE ONBOARDING QUESTIONS (answer naturally):
+  
+  1️⃣ "What will you use Airtable for?" / "How do you plan to use Airtable?"
+     → Select any option: "Project Management", "Content Planning", "Product Development", etc.
+     → Or type: "Project tracking and team collaboration"
+  
+  2️⃣ "How big is your team?" / "Team size?"
+     → Select: "Just me" or "2-10 people"
+  
+  3️⃣ "What role best describes you?"
+     → Select: "Product Manager", "Developer", "Marketing", or any role
+  
+  4️⃣ "Would you like to start with a template?"
+     → You can select "Start from scratch" or choose any template
+  
+  5️⃣ "Create your first base" / "Name your workspace"
+     → Enter name: "My Workspace" or "Project Hub"
+  
+  6️⃣ Any additional setup prompts
+     → Complete them naturally by clicking "Next", "Continue", "Skip" or providing simple answers
+
+IMPORTANT RULES:
+  ✓ Answer questions naturally and quickly
+  ✓ Don't overthink - any reasonable answer is fine
+  ✓ Click "Next", "Continue", "Get Started", "Skip" buttons to progress
+  ✓ If you see "Skip tour" or "Skip tutorial" - you can skip it
+  ✓ Goal is to reach the main Airtable workspace/dashboard
+  ✓ Complete 5-6 steps total (don't need to do everything perfectly)
+  ✓ STOP when you see the main workspace with tables/bases
+
+SUCCESS INDICATORS:
+  ✅ You see main Airtable interface with workspace
+  ✅ URL contains "/workspace" or shows base/table view
+  ✅ Onboarding wizard is no longer visible
+  ✅ You can see navigation menu, workspace name, or "Create" buttons
+
+REMEMBER: This is just setup - be quick and practical!
+"""
+
+    model_name = "gemini-2.5-computer-use-preview-10-2025"
+    SCREEN_WIDTH = 1440
+    SCREEN_HEIGHT = 900
+
+    history = [Content(role="user", parts=[Part(text=task)])]
+
+    print("\n💬 Промпт onboarding отправлен...")
+
+    result = {
+        "status": "unknown",
+        "completed_steps": 0,
+        "notes": ""
+    }
+
+    for step in range(1, max_steps + 1):
+        print(f"\n{'=' * 70}")
+        print(f"🔄 ШАГ ONBOARDING {step}/{max_steps}")
+        print(f"{'=' * 70}")
+
+        # Скриншот текущего состояния
+        screenshot_bytes = await safe_screenshot(page_airtable, full_page=False, timeout_ms=10000)
+        if screenshot_bytes:
+            history.append(Content(role="user", parts=[
+                Part(inline_data=Blob(mime_type="image/png", data=screenshot_bytes))
+            ]))
+
+        print("🧠 Модель анализирует onboarding...")
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=model_name,
+            contents=history,
+            config=config
+        )
+
+        if response is None or not getattr(response, 'candidates', None):
+            print("❌ Модель вернула пустой ответ (onboarding)")
+            break
+
+        candidate = response.candidates[0]
+        model_content = candidate.content
+
+        # Печать мыслей модели
+        has_text = False
+        has_tool_calls = False
+        final_text = ""
+
+        for part in model_content.parts:
+            if hasattr(part, 'text') and part.text:
+                has_text = True
+                final_text += part.text + " "
+                print(f"\n💭 Мысль модели (onboarding):\n   {part.text[:300]}...")
+            if hasattr(part, 'function_call') and part.function_call:
+                has_tool_calls = True
+
+        # Выполнение действий
+        tool_responses = []
+        for part in model_content.parts:
+            if hasattr(part, 'function_call') and part.function_call:
+                fc = part.function_call
+                print(f"  🔧 Действие: {fc.name}")
+                exec_result = await execute_computer_use_action(
+                    page_airtable, fc, SCREEN_WIDTH, SCREEN_HEIGHT
+                )
+                tool_responses.append(
+                    Part(function_response=FunctionResponse(name=fc.name, response=exec_result))
+                )
+                result["completed_steps"] += 1
+
+        history.append(model_content)
+
+        if tool_responses:
+            screenshot_bytes = await safe_screenshot(page_airtable, full_page=False, timeout_ms=10000)
+            parts = tool_responses.copy()
+            if screenshot_bytes:
+                parts.append(Part(inline_data=Blob(mime_type="image/png", data=screenshot_bytes)))
+            history.append(Content(role="user", parts=parts))
+
+        # Проверка завершения
+        lower = final_text.lower()
+        if any(keyword in lower for keyword in ["workspace", "main interface", "setup complete", "onboarding complete", "dashboard"]):
+            result["status"] = "success"
+            result["notes"] = "Onboarding completed successfully"
+            print("\n✅ ONBOARDING ЗАВЕРШЁН")
+            break
+
+        # Если модель больше не делает действий
+        if not has_tool_calls and has_text:
+            result["status"] = "completed"
+            result["notes"] = final_text[:300]
+            print("\n✅ Onboarding завершён (модель остановилась)")
+            break
+
+    return result
+
+
 async def main_airtable_registration_unified():
     """
     ЕДИНЫЙ ПОТОК: один браузер, две вкладки (temp-mail + Airtable).
@@ -2117,6 +2280,25 @@ async def main_airtable_registration_unified():
         print(f"✓ Подтверждено: {result.get('confirmed', False)}")
         if result.get('notes'):
             print(f"📝 Заметки: {result['notes'][:200]}")
+
+        # ШАГ 3: Onboarding - проходим дополнительные шаги настройки
+        if result.get('status') in ['success', 'unknown'] and result.get('confirmed', False):
+            print("\n" + "=" * 70)
+            print("🎯 ШАГ 3: Прохождение onboarding (5-6 дополнительных шагов)")
+            print("=" * 70)
+            print("💡 Цель: Ответить на вопросы Airtable и завершить начальную настройку")
+            
+            onboarding_result = await run_airtable_onboarding(page_airtable, client, config, max_steps=10)
+            
+            print("\n" + "=" * 70)
+            print("✅ ONBOARDING ЗАВЕРШЁН")
+            print("=" * 70)
+            print(f"📊 Статус: {onboarding_result.get('status', 'unknown')}")
+            print(f"🔢 Выполнено шагов: {onboarding_result.get('completed_steps', 0)}")
+            if onboarding_result.get('notes'):
+                print(f"📝 Заметки: {onboarding_result['notes'][:200]}")
+        else:
+            print("\n⚠️ Пропускаем onboarding - регистрация не подтверждена")
 
         # Небольшая пауза для визуальной проверки
         print("\n💤 Вкладки останутся открыты 30 сек для проверки...")
