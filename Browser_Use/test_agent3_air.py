@@ -116,15 +116,20 @@ async def safe_screenshot(page, full_page: bool = False, timeout_ms: int = 10000
 
 async def detect_cloudflare_block(page) -> tuple[bool, str]:
     """
-    Пытается определить, что страница — Cloudflare block/challenge.
+    Пытается определить, что страница — Cloudflare block/challenge или другие анти-бот системы.
     Возвращает (blocked, signal) где signal — краткое описание индикаторов.
+    
+    УЛУЧШЕННАЯ ВЕРСИЯ: также проверяет наличие контента (пустая страница = блок)
     """
     try:
         title = await page.title()
         body_text = await page.evaluate("""() => {
             try { return document.body ? document.body.innerText.slice(0, 4000) : ''; } catch(e) { return ''; }
         }""")
+        
         indicators = []
+        
+        # 🛡️ Признаки Cloudflare
         if title and ("Attention Required" in title) and ("Cloudflare" in title):
             indicators.append("title:Attention Required | Cloudflare")
         if body_text:
@@ -134,9 +139,30 @@ async def detect_cloudflare_block(page) -> tuple[bool, str]:
                 indicators.append("text:ray_id")
             if "cf-challenge" in body_text or "cf-browser-verification" in body_text:
                 indicators.append("text:cf_challenge")
+        
+        # 🚫 Признак пустой страницы (может быть загрузка или блок)
+        # Пустая страница часто появляется при:
+        # - CORS ошибках
+        # - Блокировке браузера
+        # - Ошибке DNS
+        body_html = await page.evaluate("""() => {
+            try { return document.body ? document.body.innerHTML.length : 0; } catch(e) { return 0; }
+        }""")
+        
+        if body_html < 100 and not "temp-mail" in page.url.lower():  # Для temp-mail может быть динамическая загрузка
+            indicators.append(f"html_size:{body_html} (possible_block)")
+        
+        # ⏱️ Проверка на наличие iframe (часто используется для challenge)
+        iframes = await page.evaluate("""() => {
+            return document.querySelectorAll('iframe').length;
+        }""")
+        if iframes > 3:  # Более 3 iframe = вероятно challenge
+            indicators.append(f"iframes:{iframes}")
+        
         blocked = len(indicators) > 0
         return blocked, ", ".join(indicators)
-    except Exception:
+    except Exception as e:
+        print(f"  ⚠️  detect_cloudflare_block error: {e}")
         return False, ""
 
 
@@ -342,6 +368,8 @@ async def extract_email_from_tempmail_page(page) -> str:
     """
     Извлекает email адрес со страницы temp-mail.org.
     
+    Ключевой момент: email генерируется динамически, может занять до 10 сек!
+    
     Args:
         page: Playwright Page объект
     
@@ -349,20 +377,57 @@ async def extract_email_from_tempmail_page(page) -> str:
         Email адрес или сообщение об ошибке
     """
     try:
-        # Метод 1: JavaScript - чтение значения textbox
-        try:
+        # 🔑 МЕТОД 1: Активное ожидание email с повторными попытками
+        # Email может загружаться до 15 сек после загрузки страницы
+        print("  ⏳ Ожидание загрузки email (до 15 сек)...")
+        
+        for attempt in range(30):  # 30 попыток × 0.5 сек = 15 сек макс
+            # 🎯 Расширенный поиск email через JS
             email = await page.evaluate('''() => {
-                const input = document.querySelector('#mail');
-                return input ? input.value : null;
+                // Способ 1: прямой поиск в #mail
+                let input = document.querySelector('#mail');
+                if (input && input.value && input.value.includes('@')) {
+                    return input.value;
+                }
+                
+                // Способ 2: поиск всех input элементов
+                let inputs = document.querySelectorAll('input');
+                for (let inp of inputs) {
+                    if (inp.value && inp.value.includes('@') && inp.value.includes('.')) {
+                        // Пропускаем placeholder'ы
+                        if (!inp.placeholder || !inp.placeholder.includes('@')) {
+                            return inp.value;
+                        }
+                    }
+                }
+                
+                // Способ 3: поиск в текстовых полях по классам
+                let elements = document.querySelectorAll('[class*="mail"], [class*="email"], [id*="mail"], [id*="email"]');
+                for (let el of elements) {
+                    if (el.value && el.value.includes('@')) {
+                        return el.value;
+                    }
+                    if (el.innerText && el.innerText.includes('@')) {
+                        return el.innerText;
+                    }
+                }
+                
+                return null;
             }''')
             
-            if email and '@' in email and '.' in email:
-                print(f"  ✅ Найден email через JavaScript: {email}")
+            if email and email.strip() and '@' in email and '.' in email:
+                print(f"  ✅ Найден email через JavaScript (попытка {attempt+1}): {email}")
                 return email
-        except Exception as e:
-            print(f"  ⚠️  JavaScript метод не сработал: {e}")
+            
+            # Логируем прогресс каждые 2 попытки
+            if attempt % 4 == 0 and attempt > 0:
+                print(f"     ... ещё ждём (попытка {attempt+1}/30, текущее значение: '{email}')")
+            
+            await asyncio.sleep(0.5)
         
-        # Метод 2: Regex поиск в HTML
+        print(f"  ⚠️  Email не загрузился за 15 сек, пробуем альтернативные методы...")
+        
+        # 🔑 МЕТОД 2: Regex поиск в HTML (если JS не помог)
         html = await page.content()
         email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
         matches = re.findall(email_pattern, html)
@@ -373,16 +438,34 @@ async def extract_email_from_tempmail_page(page) -> str:
                 print(f"  ✅ Найден email через regex: {match}")
                 return match
         
-        # Метод 3: Чтение из input field через селектор
+        # 🔑 МЕТОД 3: Чтение из input field через селектор
         try:
-            input_field = await page.query_selector('#mail, input[type="text"]')
+            input_field = await page.query_selector('#mail, input[type="email"], input[type="text"]')
             if input_field:
                 email = await input_field.input_value()
-                if email and '@' in email:
+                if email and '@' in email and '.' in email:
                     print(f"  ✅ Найден email через селектор: {email}")
                     return email
         except Exception as e:
             print(f"  ⚠️  Selector метод не сработал: {e}")
+        
+        # 🔑 МЕТОД 4: Поиск во всех input элементах (последняя попытка)
+        try:
+            all_emails = await page.evaluate('''() => {
+                const inputs = document.querySelectorAll('input');
+                for (let inp of inputs) {
+                    if (inp.value && inp.value.includes('@')) {
+                        return inp.value;
+                    }
+                }
+                return null;
+            }''')
+            
+            if all_emails and '@' in all_emails:
+                print(f"  ✅ Найден email во всех input'ах: {all_emails}")
+                return all_emails
+        except:
+            pass
         
         return "ERROR: Email not found. Make sure page is fully loaded and email is visible."
     
@@ -441,22 +524,78 @@ async def execute_computer_use_action(page, function_call: FunctionCall, screen_
             # Блокируем переходы на посторонние сайты
             if not is_allowed_url(url):
                 return {"success": False, "message": f"Navigation blocked by policy: {url}", "url": page.url}
+            
             try:
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-            except Exception as e:
-                # Фолбэк: более мягкое ожидание и увеличенный таймаут
+                # 🎯 УЛУЧШЕННАЯ СТРАТЕГИЯ НАВИГАЦИИ ПРОТИВ БЛОКИРОВОК
+                # Задержка перед навигацией (избегаем триггеров скорости)
+                await page.wait_for_timeout(1000)
+                
+                # СТРАТЕГИЯ 1: domcontentloaded вместо networkidle (более мягкое)
                 try:
-                    print(f"  ⚠️  Навигация с networkidle не удалась ({e}). Пробую wait_until=load...")
-                    await page.goto(url, wait_until="load", timeout=60000)
-                except Exception as e2:
-                    print(f"  ❌ Навигация не удалась повторно: {e2}")
-                    return {"success": False, "message": f"Navigate failed: {str(e2)}", "url": page.url}
-            # После навигации проверим Cloudflare блок
-            blocked, signal = await detect_cloudflare_block(page)
-            if blocked:
-                print(f"  🛡️  Cloudflare block detected after navigate → {signal}")
-                log_cloudflare_event(phase="navigate", step=-1, action="navigate", url=page.url, signal=signal)
-            return {"success": True, "message": f"Перешел на {url}", "url": page.url}
+                    print(f"  🌐 Навигация на {url} (стратегия: domcontentloaded)...")
+                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                    await page.wait_for_timeout(1500)  # Даём странице стабилизироваться
+                    print(f"  ✅ Загружено: {page.url}")
+                except Exception as e:
+                    print(f"  ⚠️  domcontentloaded не сработал ({str(e)[:50]}). Попытка 2...")
+                    
+                    # СТРАТЕГИЯ 2: load (менее строгое, чем domcontentloaded)
+                    try:
+                        await page.goto(url, wait_until="load", timeout=15000)
+                        await page.wait_for_timeout(1000)
+                        print(f"  ✅ Загружено (стратегия load): {page.url}")
+                    except Exception as e2:
+                        print(f"  ⚠️  load не сработал ({str(e2)[:50]}). Попытка 3...")
+                        
+                        # СТРАТЕГИЯ 3: Минимальное ожидание (для особенно сложных сайтов)
+                        try:
+                            nav_task = page.goto(url, wait_until=None)
+                            await asyncio.sleep(3)  # Просто ждём 3 сек
+                            await asyncio.wait_for(nav_task, timeout=5)
+                            print(f"  ✅ Загружено (стратегия minimal): {page.url}")
+                        except Exception as e3:
+                            # СТРАТЕГИЯ 4: Даже если goto фейлится, даём ещё 5 сек на загрузку
+                            print(f"  ⚠️  Все стратегии не сработали. Ждём 5 сек и проверяем...")
+                            await page.wait_for_timeout(5000)
+                            print(f"  ℹ️  Текущий URL: {page.url}")
+                
+                # 🎯 ДОПОЛНИТЕЛЬНОЕ ОЖИДАНИЕ DOM элементов (критически важно!)
+                print(f"  ⏳ Ожидание загрузки основных элементов DOM...")
+                
+                # Ждём любого значимого элемента в зависимости от URL
+                try:
+                    if "temp-mail" in url or "tempmail" in url.lower():
+                        # Для temp-mail ждём input с email
+                        await page.wait_for_selector("#mail, input[type='email']", timeout=10000)
+                        print(f"  ✅ Input элемент загружен")
+                    elif "airtable" in url:
+                        # Для Airtable ждём основной контент
+                        await page.wait_for_selector("input, button, form, [role='main']", timeout=10000)
+                        print(f"  ✅ Основные элементы Airtable загружены")
+                    else:
+                        # Универсальное ожидание body
+                        await page.wait_for_selector("body", timeout=5000)
+                except Exception as e:
+                    print(f"  ⚠️  Ожидание селектора истекло ({str(e)[:50]}), но продолжаем...")
+                
+                # 🛡️ Проверка на Cloudflare блок
+                blocked, signal = await detect_cloudflare_block(page)
+                if blocked:
+                    print(f"  🛡️  Обнаружен Cloudflare блок: {signal}")
+                    log_cloudflare_event(phase="navigate", step=-1, action="navigate", url=page.url, signal=signal)
+                    # Ждём автоматического прохождения challenge
+                    print(f"  ⏳ Ждём прохождения Cloudflare (10 сек)...")
+                    await page.wait_for_timeout(10000)
+                    # Проверяем снова
+                    blocked, signal = await detect_cloudflare_block(page)
+                    if not blocked:
+                        print(f"  ✅ Cloudflare challenge пройден!")
+                
+                return {"success": True, "message": f"Перешел на {page.url}", "url": page.url}
+                
+            except Exception as e:
+                print(f"  ❌ Навигация не удалась: {str(e)}")
+                return {"success": False, "message": f"Navigate failed: {str(e)}", "url": page.url}
         
         elif action == "search":
             # Действие 'search' отключено политикой безопасности для этой задачи
@@ -1677,13 +1816,21 @@ async def main_airtable_registration_unified():
 
     print(f"🗂️  Профиль браузера: {user_data_dir}")
 
+    # 🕵️ Маскировка браузера от bot-detection
     context = await playwright.chromium.launch_persistent_context(
         user_data_dir=user_data_dir,
         headless=False,
         viewport={'width': SCREEN_WIDTH, 'height': SCREEN_HEIGHT},
         locale='ru-RU',
         timezone_id='Europe/Moscow',
-        args=['--start-maximized']
+        user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        extra_http_headers={
+            'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Cache-Control': 'max-age=0',
+        },
+        args=['--start-maximized', '--disable-blink-features=AutomationControlled']
     )
 
     # ✅ Применяем stealth для обхода Cloudflare и других систем обнаружения
@@ -1692,6 +1839,21 @@ async def main_airtable_registration_unified():
         print("🕵️ Stealth mode активирован (обход Cloudflare и bot-detection)")
     else:
         print("⚠️  Stealth mode недоступен (playwright_stealth не установлен правильно)")
+    
+    # 🎭 Установка Human-like headers для маскировки (дополнительный обход)
+    await context.set_extra_http_headers({
+        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+    })
+    print("🎭 Human-like headers установлены (обход детектирования браузера)")
 
     # Вкладка почты (первая)
     page_mail = await context.new_page()
