@@ -4,7 +4,16 @@
 import os
 import sys
 from io import StringIO
-from coolprompt.assistant import PromptTuner
+try:
+    from coolprompt.assistant import PromptTuner
+except Exception:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _ROOT = _Path(__file__).resolve().parent
+    _LOCAL_CP = _ROOT / "coolprompt_repo"
+    if _LOCAL_CP.exists():
+        _sys.path.insert(0, str(_LOCAL_CP))
+    from coolprompt.assistant import PromptTuner  # type: ignore
 from langchain_openai import ChatOpenAI
 
 # Подавляем NLTK
@@ -42,6 +51,17 @@ try:
     print(f"\n📝 Задача: {task}")
     print("🔄 Запуск с max_tokens=4000...")
     
+    # Если нужно запустить на составном тексте (первый промпт + ответ + следующий промпт)
+    # используйте скрипт coolprompt_run_with_context.py
+    # либо раскомментируйте код ниже и задайте путь к файлам.
+    #
+    # from pathlib import Path
+    # def _read(p: str) -> str:
+    #     return Path(p).read_text(encoding="utf-8", errors="ignore")
+    # composite_prompt = _read("first.txt") + "\n\n" + _read("answer.txt") + "\n\n" + _read("next.txt")
+    # prompt_tuner.run(composite_prompt)
+    #
+    # По умолчанию выполняем тестовую задачу
     prompt_tuner.run(task)
     
     print("\n✅ УСПЕХ!")

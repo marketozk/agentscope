@@ -1,0 +1,10 @@
+# Логи
+logs/*.json
+
+# Результаты
+results/*.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

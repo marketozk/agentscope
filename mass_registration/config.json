@@ -1,0 +1,20 @@
+{
+  "description": "Настройки планировщика массовой регистрации Airtable",
+  "total_runs": 20,
+  "base_interval_seconds": 90,
+  "random_delay_min": 10,
+  "random_delay_max": 30,
+  "max_timeout_seconds": 600,
+  "retry_on_failure": true,
+  "max_retries": 2,
+  "retry_delay_seconds": 60,
+  "notes": {
+    "total_runs": "Количество запусков скрипта регистрации",
+    "base_interval_seconds": "Базовый интервал между запусками (90 = 1.5 минуты)",
+    "random_delay_min/max": "Случайная задержка добавляется к базовому интервалу",
+    "max_timeout_seconds": "Максимальное время на один запуск (600 = 10 минут)",
+    "retry_on_failure": "Повторять ли при неудаче",
+    "max_retries": "Максимальное количество повторных попыток",
+    "retry_delay_seconds": "Задержка перед повторной попыткой"
+  }
+}
