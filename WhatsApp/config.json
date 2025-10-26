@@ -1,0 +1,59 @@
+{
+  "model": {
+    "name": "gemini-2.5-computer-use-preview-10-2025",
+    "temperature": 0.3,
+    "max_output_tokens": 4096,
+    "top_p": 0.95,
+    "description": "Gemini Computer Use модель для анализа UI и планирования действий"
+  },
+  
+  "analysis": {
+    "save_logs": true,
+    "output_format": ["json", "txt"],
+    "include_screenshot_in_result": false,
+    "detailed_coordinates": true,
+    "language": "ru"
+  },
+  
+  "whatsapp": {
+    "default_screenshot_path": "screenshots/whatsapp_main.jpg",
+    "supported_formats": ["jpg", "jpeg", "png"],
+    "max_image_size_mb": 10
+  },
+  
+  "directories": {
+    "screenshots": "screenshots/",
+    "logs": "logs/",
+    "results": "results/"
+  },
+  
+  "prompt": {
+    "analyze_ui": true,
+    "find_coordinates": true,
+    "create_action_plan": true,
+    "suggest_alternatives": true,
+    "identify_risks": true
+  },
+  
+  "actions": {
+    "supported_types": [
+      "click",
+      "type",
+      "scroll",
+      "search",
+      "hover",
+      "long_press",
+      "swipe"
+    ],
+    "coordinate_format": "percentage",
+    "coordinate_precision": 1
+  },
+  
+  "output": {
+    "verbose": true,
+    "use_emoji": true,
+    "structured_format": true,
+    "include_timestamp": true,
+    "include_prompt": true
+  }
+}
