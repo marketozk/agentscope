@@ -22,3 +22,6 @@ typing-extensions>=4.8.0
 faker>=30.0.0
 asyncio-compat>=0.1.2
 dataclasses-json>=0.6.0
+
+# GUI (Flet)
+flet>=0.22.0
