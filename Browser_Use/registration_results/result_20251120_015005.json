@@ -1,0 +1,14 @@
+{
+  "iteration": 4,
+  "timestamp": "2025-11-20T01:50:05.401967",
+  "email": "dejexak152@canvect.com",
+  "full_name": "Серафим Жвиков",
+  "password": "a3a824812",
+  "registered": true,
+  "confirmed": true,
+  "fingerprint": {
+    "session_id": "d9227f4085201e8a",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "city": "New York"
+  }
+}

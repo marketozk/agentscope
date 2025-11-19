@@ -1,0 +1,29 @@
+{
+  "profile": {
+    "name": "User_6377ec3d",
+    "default_content_setting_values": {
+      "notifications": 2,
+      "geolocation": 1
+    },
+    "exit_type": "Normal",
+    "password_manager_enabled": false
+  },
+  "credentials_enable_service": false,
+  "download": {
+    "prompt_for_download": false
+  },
+  "safebrowsing": {
+    "enabled": true
+  },
+  "browser": {
+    "check_default_browser": false
+  },
+  "distribution": {
+    "skip_first_run_ui": true,
+    "show_welcome_page": false,
+    "import_history": false,
+    "import_bookmarks": false,
+    "import_search_engine": false
+  },
+  "first_run_tabs": []
+}

@@ -1,0 +1,14 @@
+{
+  "iteration": 1,
+  "timestamp": "2025-11-20T00:15:47.180831",
+  "email": "xekifej464@canvect.com",
+  "full_name": "Геннадий Кравцов",
+  "password": "6e52e6471",
+  "registered": true,
+  "confirmed": false,
+  "fingerprint": {
+    "session_id": "1514bdc89fb03fc8",
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0",
+    "city": "Los Angeles"
+  }
+}

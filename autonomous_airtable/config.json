@@ -1,0 +1,12 @@
+{
+  "referral_links": {
+    "my": "https://airtable.com/invite/r/ovoAP1zR",
+    "colin": "https://airtable.com/invite/r/LzgpVACU"
+  },
+  "active_referral": "my",
+  "settings": {
+    "delay_between_cycles": 60,
+    "headless": false,
+    "max_wait_for_email": 60
+  }
+}
