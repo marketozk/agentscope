@@ -140,3 +140,33 @@ dmypy.json
 
 # Screenshots
 screenshots/
+
+# Browser profiles (Camoufox, Firefox, etc.)
+browser_profiles/
+profiles/
+temp_browser_profile/
+
+# Debug screenshots and dumps
+debug_screenshot_*.png
+debug_screenshots/
+
+# Registration results (содержат личные данные)
+**/registration_results/
+
+# SQLite databases
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Firefox/Camoufox cache
+**/cache2/
+**/startupCache/
+**/storage/
+cookies.sqlite*
+webappsstore.sqlite*
+places.sqlite*
+favicons.sqlite*
+
+# Большие бинарные файлы
+*.moz-backup
+*.mozlz4
