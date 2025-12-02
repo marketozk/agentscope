@@ -3,10 +3,48 @@
     "my": "https://airtable.com/invite/r/ovoAP1zR",
     "colin": "https://airtable.com/invite/r/LzgpVACU"
   },
-  "active_referral": "my",
+  "active_referral": "colin",
+  
+  "email_providers": {
+    "temp-mail": {
+      "name": "Temp-Mail.org",
+      "url": "https://temp-mail.org/en/",
+      "enabled": false,
+      "description": "Популярный сервис, но блокирует по IP при частом использовании"
+    },
+    "guerrillamail": {
+      "name": "Guerrilla Mail",
+      "url": "https://www.guerrillamail.com/",
+      "enabled": true,
+      "description": "Надежный сервис без ограничений"
+    },
+    "10minutemail": {
+      "name": "10 Minute Mail",
+      "url": "https://10minutemail.com/",
+      "enabled": true,
+      "description": "Быстрый, письмо живет 10 минут"
+    },
+    "tempail": {
+      "name": "Tempail",
+      "url": "https://tempail.com/en/",
+      "enabled": true,
+      "description": "Простой интерфейс"
+    },
+    "emailondeck": {
+      "name": "Email On Deck",
+      "url": "https://www.emailondeck.com/",
+      "enabled": false,
+      "description": "Хороший сервис с API"
+    }
+  },
+  "active_email_provider": "10minutemail",
+  
+  
   "settings": {
     "delay_between_cycles": 60,
     "headless": false,
-    "max_wait_for_email": 60
+    "max_wait_for_email": 60,
+    "rotate_email_providers": false,
+    "fallback_on_error": true
   }
 }

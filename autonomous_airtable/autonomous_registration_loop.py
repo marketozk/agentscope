@@ -24,6 +24,7 @@ from fingerprint_generator import FingerprintGenerator
 from profile_manager import ProfileManager
 from browser_framework.browser_agent import BrowserAgent
 from browser_framework.steps import BrowserStep, BrowserStepError
+from email_providers import get_provider, get_enabled_providers, PROVIDERS
 
 
 class AutonomousRegistration:
@@ -46,6 +47,15 @@ class AutonomousRegistration:
         self.delay_between_cycles = self.config["settings"].get("delay_between_cycles", 60)
         self.headless = self.config["settings"].get("headless", False)
         self.max_wait_for_email = self.config["settings"].get("max_wait_for_email", 60)
+        self.rotate_email_providers = self.config["settings"].get("rotate_email_providers", False)
+        self.fallback_on_error = self.config["settings"].get("fallback_on_error", True)
+        
+        # Email провайдер
+        self.active_email_provider = self.config.get("active_email_provider", "guerrillamail")
+        self.enabled_providers = get_enabled_providers(self.config)
+        self.current_provider_index = 0
+        self._init_email_provider()
+        
         # Используем абсолютный путь для надёжности
         self.results_dir = Path(__file__).parent.parent / "Browser_Use" / "registration_results"
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -67,6 +77,47 @@ class AutonomousRegistration:
         self.step_get_temp_email = BrowserStep("get_temp_email", max_retries=2)
         self.step_register = BrowserStep("register_airtable", max_retries=1)
         self.step_confirm_email = BrowserStep("confirm_email", max_retries=2)
+    
+    def _init_email_provider(self):
+        """Инициализация email провайдера"""
+        self.email_provider = get_provider(self.active_email_provider)
+        if not self.email_provider:
+            # Fallback на guerrillamail
+            print(f"⚠️ Провайдер '{self.active_email_provider}' не найден, используем guerrillamail")
+            self.email_provider = get_provider("guerrillamail")
+        
+        print(f"\n📧 Email провайдер: {self.email_provider.name}")
+        print(f"   🔗 URL: {self.email_provider.url}")
+        print(f"   📋 Включенные провайдеры: {', '.join(self.enabled_providers)}")
+        if self.rotate_email_providers:
+            print(f"   🔄 Ротация провайдеров: ВКЛЮЧЕНА")
+    
+    def _get_next_provider(self):
+        """Получить следующий провайдер для fallback или ротации"""
+        if not self.enabled_providers:
+            return None
+        
+        self.current_provider_index = (self.current_provider_index + 1) % len(self.enabled_providers)
+        provider_name = self.enabled_providers[self.current_provider_index]
+        return get_provider(provider_name)
+    
+    def switch_provider(self, provider_name: str = None):
+        """Переключить на другой провайдер"""
+        if provider_name:
+            new_provider = get_provider(provider_name)
+            if new_provider:
+                self.email_provider = new_provider
+                self.active_email_provider = provider_name
+                print(f"\n🔄 Переключено на провайдер: {self.email_provider.name}")
+                return True
+        else:
+            # Переключить на следующий
+            new_provider = self._get_next_provider()
+            if new_provider:
+                self.email_provider = new_provider
+                print(f"\n🔄 Переключено на провайдер: {self.email_provider.name}")
+                return True
+        return False
         
     async def init_browser(self, fingerprint: Dict, profile_path: Path):
         """Инициализация браузера через BrowserAgent (Camoufox внутри)."""
@@ -106,60 +157,34 @@ class AutonomousRegistration:
                 pass
     
     async def get_temp_email(self, page: Page) -> Optional[str]:
-        """Получить временную почту с temp-mail.org"""
-        print("\n📧 Получение временной почты...")
-        await page.goto("https://temp-mail.org/en/", wait_until="domcontentloaded")
-
-        max_attempts = 15
-        email: Optional[str] = None
-
-        for attempt in range(max_attempts):
-            await asyncio.sleep(2)
-
-            # Метод 1: значение в input#mail
-            email = await page.evaluate(
-                """
-                () => {
-                    const mailInput = document.getElementById('mail');
-                    if (mailInput && mailInput.value && mailInput.value.includes('@') && mailInput.value !== 'Loading') {
-                        return mailInput.value;
-                    }
-                    return null;
-                }
-                """
-            )
-
-            if email:
-                break
-
-            # Метод 2: data-clipboard-text
-            email = await page.evaluate(
-                """
-                () => {
-                    const clipboardElements = document.querySelectorAll('[data-clipboard-text]');
-                    for (const el of clipboardElements) {
-                        const text = el.getAttribute('data-clipboard-text');
-                        if (text && text.includes('@')) {
-                            return text;
-                        }
-                    }
-                    return null;
-                }
-                """
-            )
-
-            if email:
-                break
-
-            if attempt < max_attempts - 1:  # Не логируем последнюю попытку
-                print(f"   ⏳ Попытка {attempt + 1}/{max_attempts}...")
-
-        if email and "@" in email:
-            print(f"✅ Получен email: {email}")
-            return email
-
-        print("❌ Не удалось получить временную почту")
-        return None
+        """Получить временную почту через текущий провайдер"""
+        # Ротация провайдеров если включена
+        if self.rotate_email_providers:
+            self.switch_provider()
+        
+        # Пробуем получить email
+        email = await self.email_provider.get_email(page)
+        
+        # Если не получилось и включен fallback - пробуем другие провайдеры
+        if not email and self.fallback_on_error:
+            print(f"⚠️ {self.email_provider.name} не сработал, пробуем другие провайдеры...")
+            
+            for provider_name in self.enabled_providers:
+                if provider_name == self.active_email_provider:
+                    continue  # Пропускаем текущий
+                
+                print(f"\n🔄 Пробуем провайдер: {provider_name}")
+                fallback_provider = get_provider(provider_name)
+                if fallback_provider:
+                    email = await fallback_provider.get_email(page)
+                    if email:
+                        # Переключаемся на работающий провайдер
+                        self.email_provider = fallback_provider
+                        self.active_email_provider = provider_name
+                        print(f"✅ Переключились на {fallback_provider.name}")
+                        break
+        
+        return email
     
     async def register_on_airtable(self, page: Page, email: str, full_name: str, password: str) -> bool:
         """Регистрация на Airtable"""
@@ -382,74 +407,116 @@ class AutonomousRegistration:
             return False
     
     async def confirm_email(self, mail_page: Page, airtable_page: Page) -> bool:
-        """Подтверждение email"""
+        """Подтверждение email через текущий провайдер"""
         print("\n📬 Ожидание письма подтверждения...")
-        # Ждем письмо от Airtable (время из конфига)
+        print(f"   📧 Провайдер: {self.email_provider.name}")
+        print(f"   🔍 URL страницы почты: {mail_page.url}")
+        
         max_wait = self.max_wait_for_email
-
-        for attempt in range(max_wait):
-            await asyncio.sleep(2)
-
-            # Ищем письмо от Airtable в списке
-            email_selectors = [
-                '.inbox-dataList ul li',
-            ]
-
-            found_email = None
-            for selector in email_selectors:
-                emails = await mail_page.query_selector_all(selector)
-                for email_elem in emails:
-                    text = (await email_elem.inner_text()).lower()
-                    if 'airtable' in text and 'confirm your email' in text:
-                        found_email = email_elem
+        
+        screenshots_dir = Path("debug_screenshots")
+        screenshots_dir.mkdir(exist_ok=True)
+        
+        # Логирование в файл
+        log_file = screenshots_dir / f"email_search_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        
+        def log(msg: str):
+            """Логировать в файл и консоль"""
+            print(msg)
+            try:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
+            except:
+                pass
+        
+        log(f"📋 Начало поиска письма. Провайдер: {self.email_provider.name}")
+        log(f"📋 Max попыток: {max_wait}")
+        
+        # Ожидаем письмо от Airtable через провайдер
+        email_data = await self.email_provider.wait_for_email(mail_page, "airtable", max_wait)
+        
+        if not email_data:
+            log("❌ Письмо от Airtable не найдено")
+            # Сохраняем финальный HTML
+            try:
+                html_path = screenshots_dir / f"mail_page_final_{datetime.now().strftime('%H%M%S')}.html"
+                html_content = await mail_page.content()
+                html_path.write_text(html_content, encoding="utf-8")
+                log(f"   💾 Финальный HTML: {html_path.name}")
+            except:
+                pass
+            return False
+        
+        log("✅ Найдено письмо от Airtable!")
+        
+        # Сохраняем скриншот
+        try:
+            await mail_page.screenshot(path=str(screenshots_dir / "before_open_email.png"))
+        except:
+            pass
+        
+        # Открываем письмо
+        log("   🖱️ Открытие письма...")
+        opened = await self.email_provider.open_email(mail_page, email_data)
+        
+        if not opened:
+            log("⚠️ Не удалось открыть письмо, пробуем fallback методы...")
+            # Fallback: пробуем кликнуть напрямую
+            try:
+                elem = email_data.get("element")
+                if elem:
+                    await elem.click()
+                    await asyncio.sleep(3)
+                    opened = True
+            except:
+                pass
+        
+        await asyncio.sleep(2)
+        log(f"   📍 URL после открытия: {mail_page.url}")
+        
+        # Сохраняем скриншот открытого письма
+        try:
+            await mail_page.screenshot(path=str(screenshots_dir / "after_open_email.png"))
+            html_path = screenshots_dir / f"opened_email_{datetime.now().strftime('%H%M%S')}.html"
+            html_content = await mail_page.content()
+            html_path.write_text(html_content, encoding="utf-8")
+            log(f"   💾 HTML письма: {html_path.name}")
+        except:
+            pass
+        
+        # Ищем ссылку подтверждения через провайдер
+        log("   🔍 Поиск ссылки подтверждения...")
+        confirm_url = await self.email_provider.get_confirm_link(mail_page)
+        
+        if not confirm_url:
+            log("❌ Ссылка подтверждения не найдена!")
+            # Пробуем найти вручную все ссылки на airtable.com
+            try:
+                all_links = await mail_page.query_selector_all('a[href*="airtable.com"]')
+                log(f"   Найдено ссылок на airtable.com: {len(all_links)}")
+                for i, link in enumerate(all_links):
+                    href = await link.get_attribute('href')
+                    log(f"      {i+1}: {href[:80] if href else 'None'}...")
+                    if href and ('verify' in href.lower() or 'confirm' in href.lower() or 'auth' in href.lower()):
+                        confirm_url = href
+                        log(f"   ✅ Найдена подходящая ссылка!")
                         break
-                if found_email:
-                    break
-
-            if found_email:
-                print("✅ Найдено письмо от Airtable!")
-
-                # Открываем письмо (кликаем по ссылке внутри элемента)
-                link = await found_email.query_selector('a.viewLink') or found_email
-                await link.click()
-                await asyncio.sleep(3)
-
-                # Ищем ссылку подтверждения внутри письма
-                confirm_selectors = [
-                    'a:has-text("Confirm my account")',
-                    'a:has-text("Confirm")',
-                    'a:has-text("Verify")',
-                    'a[href*="airtable.com/auth/verifyEmail"]',
-                ]
-                confirm_link = None
-                for sel in confirm_selectors:
-                    confirm_link = await mail_page.query_selector(sel)
-                    if confirm_link:
-                        break
-
-                if not confirm_link:
-                    print("⚠️ Письмо открыто, но ссылка подтверждения не найдена")
-                    return False
-
-                href = await confirm_link.get_attribute('href')
-                if not href:
-                    print("⚠️ У ссылки подтверждения нет href")
-                    return False
-
-                print(f"   🔗 Найдена ссылка подтверждения: {href[:80]}...")
-                await airtable_page.goto(href, wait_until="domcontentloaded")
-                await asyncio.sleep(5)
-                print("✅ Email подтвержден!")
-                
-                # Проходим дополнительные шаги регистрации (если есть)
-                await self.complete_onboarding_steps(airtable_page)
-                
-                return True
-
-            print(f"   ⏳ Ожидание письма... {attempt + 1}/{max_wait}")
-
-        print("❌ Письмо не пришло в течение отведенного времени")
-        return False
+            except Exception as e:
+                log(f"   ⚠️ Ошибка поиска ссылок: {e}")
+        
+        if not confirm_url:
+            log("❌ Не удалось найти ссылку подтверждения!")
+            return False
+        
+        log(f"   🔗 Переход по ссылке: {confirm_url[:80]}...")
+        await airtable_page.goto(confirm_url, wait_until="domcontentloaded")
+        await asyncio.sleep(5)
+        log("✅ Email подтвержден!")
+        
+        # Проходим онбординг
+        await self.complete_onboarding_steps(airtable_page)
+        
+        return True
     
     async def complete_onboarding_steps(self, page: Page, max_steps: int = 10):
         """Универсальное прохождение шагов онбординга после регистрации"""
@@ -523,20 +590,33 @@ class AutonomousRegistration:
                     textAreas: []
                 };
                 
+                // Функция проверки видимости элемента
+                function isVisible(el) {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    return style.display !== 'none' 
+                        && style.visibility !== 'hidden' 
+                        && style.opacity !== '0'
+                        && el.offsetWidth > 0 
+                        && el.offsetHeight > 0;
+                }
+                
                 // Заголовки
                 document.querySelectorAll('h1, h2, h3').forEach(h => {
                     const text = h.textContent.trim();
-                    if (text) data.headings.push(text);
+                    if (text && isVisible(h)) data.headings.push(text);
                 });
                 
                 // Кнопки
-                document.querySelectorAll('button:visible, input[type="submit"]:visible, a.button:visible').forEach(btn => {
+                document.querySelectorAll('button, input[type="submit"], a.button').forEach(btn => {
+                    if (!isVisible(btn)) return;
                     const text = btn.textContent.trim() || btn.value || btn.getAttribute('aria-label') || '';
                     if (text) data.buttons.push(text);
                 });
                 
                 // Поля ввода
-                document.querySelectorAll('input:visible:not([type="hidden"])').forEach(input => {
+                document.querySelectorAll('input:not([type="hidden"])').forEach(input => {
+                    if (!isVisible(input)) return;
                     data.inputs.push({
                         type: input.type,
                         name: input.name,
@@ -546,7 +626,8 @@ class AutonomousRegistration:
                 });
                 
                 // Текстовые области
-                document.querySelectorAll('textarea:visible').forEach(ta => {
+                document.querySelectorAll('textarea').forEach(ta => {
+                    if (!isVisible(ta)) return;
                     data.textAreas.push({
                         name: ta.name,
                         placeholder: ta.placeholder,
