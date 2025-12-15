@@ -195,57 +195,140 @@ class TempMailProvider(EmailProvider):
         return None
     
     async def check_inbox(self, page: Page) -> List[Dict]:
+        """Проверка входящих писем на temp-mail.org (обновлено декабрь 2025)"""
         emails = []
         
-        selectors = [
-            '.inbox-area.onemail',
-            '.inbox-area[data-id]',
-            'div.inbox-area',
-        ]
-        
-        for selector in selectors:
-            try:
-                elements = await page.query_selector_all(selector)
-                for elem in elements:
-                    try:
-                        text = await elem.inner_text()
-                        data_id = await elem.get_attribute('data-id')
-                        emails.append({
-                            "element": elem,
-                            "text": text,
-                            "id": data_id,
-                            "from": text.split('\n')[0] if '\n' in text else text,
-                            "subject": text.split('\n')[1] if '\n' in text else ""
-                        })
-                    except:
+        # Новая структура temp-mail.org: письма в .inbox-dataList ul li
+        # Класс "hide" убирается когда появляется письмо
+        try:
+            # Ищем все li внутри inbox-dataList
+            elements = await page.query_selector_all('.inbox-dataList ul li')
+            
+            for elem in elements:
+                try:
+                    # Проверяем, что это не пустой шаблон (у пустого li есть класс hide)
+                    class_attr = await elem.get_attribute('class') or ''
+                    
+                    # Пропускаем скрытые элементы (шаблоны)
+                    if 'hide' in class_attr:
                         continue
-                if emails:
-                    break
-            except:
-                continue
+                    
+                    # Получаем данные из span элементов
+                    sender_name_elem = await elem.query_selector('.inboxSenderName')
+                    sender_email_elem = await elem.query_selector('.inboxSenderEmail')
+                    subject_elem = await elem.query_selector('.inboxSubject .title-subject a, .inboxSubject a.viewLink')
+                    
+                    sender_name = ""
+                    sender_email = ""
+                    subject = ""
+                    
+                    if sender_name_elem:
+                        sender_name = (await sender_name_elem.inner_text()).strip()
+                    if sender_email_elem:
+                        sender_email = (await sender_email_elem.inner_text()).strip()
+                    if subject_elem:
+                        subject = (await subject_elem.inner_text()).strip()
+                    
+                    # Пропускаем пустые элементы и шаблоны с текстом "Subject"
+                    if not sender_name and not sender_email:
+                        continue
+                    if subject.lower() == 'subject' and not sender_name:
+                        continue  # Это шаблонный текст
+                    
+                    # Комбинируем отправителя
+                    from_text = f"{sender_name} {sender_email}".strip()
+                    if not from_text:
+                        from_text = (await elem.inner_text()).strip()
+                    
+                    print(f"   📧 Найдено письмо: от '{from_text}', тема: '{subject}'")
+                    
+                    emails.append({
+                        "element": elem,
+                        "text": f"{from_text} {subject}",
+                        "from": from_text,
+                        "subject": subject,
+                        "sender_name": sender_name,
+                        "sender_email": sender_email,
+                    })
+                except Exception as e:
+                    print(f"   ⚠️ Ошибка парсинга письма: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"   ⚠️ Ошибка проверки inbox: {e}")
+        
+        # Fallback: старые селекторы на случай если структура изменится
+        if not emails:
+            old_selectors = [
+                '.inbox-area.onemail',
+                '.inbox-area[data-id]',
+            ]
+            for selector in old_selectors:
+                try:
+                    elements = await page.query_selector_all(selector)
+                    for elem in elements:
+                        try:
+                            text = await elem.inner_text()
+                            data_id = await elem.get_attribute('data-id')
+                            if text.strip() and 'inbox is empty' not in text.lower():
+                                emails.append({
+                                    "element": elem,
+                                    "text": text,
+                                    "id": data_id,
+                                    "from": text.split('\n')[0] if '\n' in text else text,
+                                    "subject": text.split('\n')[1] if len(text.split('\n')) > 1 else ""
+                                })
+                        except:
+                            continue
+                    if emails:
+                        break
+                except:
+                    continue
         
         return emails
     
     async def open_email(self, page: Page, email_data: Dict) -> bool:
+        """Открыть письмо на temp-mail.org (обновлено декабрь 2025)"""
         try:
             elem = email_data.get("element")
             if not elem:
                 return False
             
-            # Пробуем найти ссылку на /view/
-            view_link = await elem.query_selector('a[href*="/view/"]')
+            # Новая структура: кликаем на ссылку .viewLink внутри li
+            view_link = await elem.query_selector('a.viewLink')
             if view_link:
-                href = await view_link.get_attribute('href')
-                if href.startswith('/'):
-                    href = f"https://temp-mail.org{href}"
-                await page.goto(href, wait_until="domcontentloaded")
-                await asyncio.sleep(2)
-                return True
+                print(f"   🖱️ Клик на viewLink...")
+                await view_link.click()
+                await asyncio.sleep(3)
+                
+                # Проверяем что перешли на страницу просмотра письма
+                if '/view/' in page.url:
+                    print(f"   ✅ Письмо открыто: {page.url}")
+                    return True
             
-            # Кликаем на элемент
+            # Fallback: пробуем кликнуть на сам элемент li
+            print(f"   🖱️ Клик на элемент письма...")
             await elem.click()
             await asyncio.sleep(3)
-            return '/view/' in page.url
+            
+            # Проверяем результат
+            if '/view/' in page.url:
+                print(f"   ✅ Письмо открыто: {page.url}")
+                return True
+            
+            # Fallback: ищем ссылку на /view/ напрямую
+            view_href = await elem.query_selector('a[href*="/view/"]')
+            if view_href:
+                href = await view_href.get_attribute('href')
+                if href:
+                    if href.startswith('/'):
+                        href = f"https://temp-mail.org{href}"
+                    print(f"   🔗 Переход по ссылке: {href}")
+                    await page.goto(href, wait_until="domcontentloaded")
+                    await asyncio.sleep(2)
+                    return True
+            
+            return False
             
         except Exception as e:
             print(f"   ⚠️ Ошибка открытия письма: {e}")
