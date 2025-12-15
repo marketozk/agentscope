@@ -27,6 +27,166 @@ from browser_framework.steps import BrowserStep, BrowserStepError
 from email_providers import get_provider, get_enabled_providers, PROVIDERS
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🎨 ЦВЕТНОЙ ВЫВОД В КОНСОЛЬ
+# ═══════════════════════════════════════════════════════════════════════════════
+class Colors:
+    """ANSI коды для цветного вывода в терминале"""
+    # Основные цвета
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    
+    # Цвета текста
+    BLACK = "\033[30m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[37m"
+    
+    # Яркие цвета
+    BRIGHT_RED = "\033[91m"
+    BRIGHT_GREEN = "\033[92m"
+    BRIGHT_YELLOW = "\033[93m"
+    BRIGHT_BLUE = "\033[94m"
+    BRIGHT_MAGENTA = "\033[95m"
+    BRIGHT_CYAN = "\033[96m"
+    
+    # Фоновые цвета
+    BG_BLACK = "\033[40m"
+    BG_RED = "\033[41m"
+    BG_GREEN = "\033[42m"
+    BG_YELLOW = "\033[43m"
+    BG_BLUE = "\033[44m"
+    BG_MAGENTA = "\033[45m"
+    BG_CYAN = "\033[46m"
+    BG_WHITE = "\033[47m"
+    
+    # Яркие фоны
+    BG_BRIGHT_RED = "\033[101m"
+    BG_BRIGHT_GREEN = "\033[102m"
+    BG_BRIGHT_YELLOW = "\033[103m"
+    BG_BRIGHT_BLUE = "\033[104m"
+    BG_BRIGHT_CYAN = "\033[106m"
+
+
+class ConsolePrinter:
+    """Форматированный вывод для этапов регистрации"""
+    
+    WIDTH = 70  # Ширина блока
+    
+    @staticmethod
+    def stage_header(stage_num: int, total: int, title: str, icon: str = "📌"):
+        """Заголовок этапа с цветной заливкой"""
+        c = Colors
+        w = ConsolePrinter.WIDTH
+        # Формируем текст без emoji для расчёта длины
+        text_only = f" ЭТАП {stage_num}/{total}: {title} "
+        # Добавляем emoji отдельно (emoji занимает ~2 символа ширины)
+        header = f" {icon} ЭТАП {stage_num}/{total}: {title} "
+        padding = w - len(text_only) - 3  # -3 для emoji + пробел
+        
+        print(f"\n{c.BG_BLUE}{c.WHITE}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_BLUE}{c.WHITE}{c.BOLD}{header}{' ' * max(0, padding)}{c.RESET}")
+        print(f"{c.BG_BLUE}{c.WHITE}{c.BOLD}{'═' * w}{c.RESET}")
+    
+    @staticmethod
+    def substep(text: str, status: str = "pending"):
+        """Подшаг с индикатором статуса"""
+        c = Colors
+        icons = {
+            "pending": f"{c.YELLOW}⏳{c.RESET}",
+            "success": f"{c.BRIGHT_GREEN}✅{c.RESET}",
+            "error": f"{c.BRIGHT_RED}❌{c.RESET}",
+            "warning": f"{c.BRIGHT_YELLOW}⚠️{c.RESET}",
+            "info": f"{c.BRIGHT_CYAN}ℹ️{c.RESET}",
+        }
+        icon = icons.get(status, icons["pending"])
+        
+        if status == "success":
+            print(f"   {icon} {c.GREEN}{text}{c.RESET}")
+        elif status == "error":
+            print(f"   {icon} {c.RED}{text}{c.RESET}")
+        elif status == "warning":
+            print(f"   {icon} {c.YELLOW}{text}{c.RESET}")
+        else:
+            print(f"   {icon} {text}")
+    
+    @staticmethod
+    def cycle_start(iteration: int):
+        """Начало цикла"""
+        c = Colors
+        w = ConsolePrinter.WIDTH
+        text = f"🔄 ЦИКЛ РЕГИСТРАЦИИ #{iteration}"
+        pad_left = (w - len(text) + 18) // 2  # +18 компенсация emoji
+        pad_right = w - pad_left - len(text) + 20
+        
+        print(f"\n{c.BG_MAGENTA}{c.WHITE}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_MAGENTA}{c.WHITE}{c.BOLD}{' ' * pad_left}{text}{' ' * pad_right}{c.RESET}")
+        print(f"{c.BG_MAGENTA}{c.WHITE}{c.BOLD}{'═' * w}{c.RESET}")
+    
+    @staticmethod
+    def success_banner(email: str, password: str):
+        """Баннер успешной регистрации"""
+        c = Colors
+        w = ConsolePrinter.WIDTH
+        
+        print(f"\n{c.BG_BRIGHT_GREEN}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_BRIGHT_GREEN}{c.BLACK}{c.BOLD}      🎉🎉🎉 РЕГИСТРАЦИЯ УСПЕШНА! 🎉🎉🎉                      {c.RESET}")
+        print(f"{c.BG_BRIGHT_GREEN}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_GREEN}{c.WHITE}  📧 Email:  {email:<55}{c.RESET}")
+        print(f"{c.BG_GREEN}{c.WHITE}  🔑 Пароль: {password:<55}{c.RESET}")
+        print(f"{c.BG_BRIGHT_GREEN}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+    
+    @staticmethod
+    def partial_success_banner(email: str, password: str):
+        """Баннер частичного успеха (регистрация без подтверждения)"""
+        c = Colors
+        w = ConsolePrinter.WIDTH
+        
+        print(f"\n{c.BG_BRIGHT_YELLOW}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_BRIGHT_YELLOW}{c.BLACK}{c.BOLD}      ⚠️ РЕГИСТРАЦИЯ ПРОШЛА (email не подтверждён)            {c.RESET}")
+        print(f"{c.BG_BRIGHT_YELLOW}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_YELLOW}{c.BLACK}  📧 Email:  {email:<55}{c.RESET}")
+        print(f"{c.BG_YELLOW}{c.BLACK}  🔑 Пароль: {password:<55}{c.RESET}")
+        print(f"{c.BG_BRIGHT_YELLOW}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+    
+    @staticmethod
+    def failure_banner(reason: str = "Неизвестная ошибка"):
+        """Баннер неудачной регистрации"""
+        c = Colors
+        w = ConsolePrinter.WIDTH
+        
+        print(f"\n{c.BG_BRIGHT_RED}{c.WHITE}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_BRIGHT_RED}{c.WHITE}{c.BOLD}      ❌❌❌ РЕГИСТРАЦИЯ НЕ УДАЛАСЬ ❌❌❌                      {c.RESET}")
+        print(f"{c.BG_BRIGHT_RED}{c.WHITE}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_RED}{c.WHITE}  Причина: {reason:<58}{c.RESET}")
+        print(f"{c.BG_BRIGHT_RED}{c.WHITE}{c.BOLD}{'═' * w}{c.RESET}")
+    
+    @staticmethod
+    def statistics(total: int, success: int, failed: int):
+        """Статистика"""
+        c = Colors
+        w = ConsolePrinter.WIDTH
+        rate = (success / total * 100) if total > 0 else 0
+        
+        print(f"\n{c.BG_CYAN}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_CYAN}{c.BLACK}{c.BOLD}                         📊 СТАТИСТИКА                          {c.RESET}")
+        print(f"{c.BG_CYAN}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+        print(f"{c.BG_CYAN}{c.BLACK}  Всего попыток:  {total:<51}{c.RESET}")
+        print(f"{c.BG_GREEN}{c.WHITE}  Успешных:       {success:<51}{c.RESET}")
+        print(f"{c.BG_RED}{c.WHITE}  Неудачных:      {failed:<51}{c.RESET}")
+        print(f"{c.BG_CYAN}{c.BLACK}  Процент успеха: {rate:.1f}%{' ' * 47}{c.RESET}")
+        print(f"{c.BG_CYAN}{c.BLACK}{c.BOLD}{'═' * w}{c.RESET}")
+
+
+# Глобальный принтер
+printer = ConsolePrinter()
+
+
 class AutonomousRegistration:
     """Полностью автономная регистрация без API ключей"""
     
@@ -820,46 +980,75 @@ class AutonomousRegistration:
             print(f"❌ Шаг confirm_email упал: {e}")
             return False
     
+    def _print_stage(self, stage_num: int, total_stages: int, title: str, icon: str = "📌"):
+        """Выводит красивый заголовок этапа с цветной заливкой"""
+        printer.stage_header(stage_num, total_stages, title, icon)
+    
+    def _print_substep(self, step: str, status: str = "pending"):
+        """Выводит подшаг с цветным статусом"""
+        # Конвертируем старые статусы в новые
+        status_map = {
+            "⏳": "pending",
+            "✅": "success", 
+            "❌": "error",
+            "⚠️": "warning",
+            "ℹ️": "info",
+        }
+        status = status_map.get(status, status)
+        printer.substep(step, status)
+    
     async def single_registration_cycle(self, iteration: int):
         """Один полный цикл регистрации"""
-        print("\n" + "="*70)
-        print(f"🔄 ЦИКЛ РЕГИСТРАЦИИ #{iteration}")
-        print("="*70)
+        total_stages = 8
+        
+        printer.cycle_start(iteration)
         
         self.total_attempts += 1
         
-        # 1. Создаем полноценный профиль браузера
-        print("   📂 Создание нового браузерного профиля...")
+        # ═══════════════════════════════════════════════════════════════
+        # ЭТАП 1: Создание профиля
+        # ═══════════════════════════════════════════════════════════════
+        self._print_stage(1, total_stages, "СОЗДАНИЕ ПРОФИЛЯ БРАУЗЕРА", "📂")
+        self._print_substep("Генерация уникального профиля...")
         profile = self.profile_manager.create_profile()
         profile_path = Path(profile["profile_path"])
+        self._print_substep(f"Профиль: {profile_path.name}", "✅")
         
-        # 2. Генерируем уникальный fingerprint
+        # ═══════════════════════════════════════════════════════════════
+        # ЭТАП 2: Генерация Fingerprint
+        # ═══════════════════════════════════════════════════════════════
+        self._print_stage(2, total_stages, "ГЕНЕРАЦИЯ FINGERPRINT", "🎭")
         generator = FingerprintGenerator()
         fingerprint = generator.generate_complete_fingerprint()
         generator.print_fingerprint(fingerprint)
         
-        # 3. Запускаем браузер с профилем и fingerprint
+        # ═══════════════════════════════════════════════════════════════
+        # ЭТАП 3: Запуск браузера
+        # ═══════════════════════════════════════════════════════════════
+        self._print_stage(3, total_stages, "ЗАПУСК БРАУЗЕРА", "🦊")
         await self.init_browser(fingerprint, profile_path)
         
         try:
-            # 4. Прогреваем браузер (реалистичное поведение)
-            print("\n🔥 Прогрев браузера для реалистичности...")
+            # ═══════════════════════════════════════════════════════════════
+            # ЭТАП 4: Прогрев браузера
+            # ═══════════════════════════════════════════════════════════════
+            self._print_stage(4, total_stages, "ПРОГРЕВ БРАУЗЕРА", "🔥")
             try:
                 warmup_page = await self.context.new_page()
                 
-                # Посещаем несколько обычных сайтов
                 warmup_sites = [
                     "https://www.google.com",
                     "https://www.wikipedia.org",
                 ]
                 
-                for site in warmup_sites:
+                for i, site in enumerate(warmup_sites, 1):
                     try:
-                        print(f"   🌐 Посещение: {site}")
+                        self._print_substep(f"[{i}/{len(warmup_sites)}] {site}")
                         await warmup_page.goto(site, wait_until="domcontentloaded", timeout=15000)
                         await asyncio.sleep(random.uniform(2, 4))
+                        self._print_substep(f"[{i}/{len(warmup_sites)}] {site}", "✅")
                     except Exception as e:
-                        print(f"   ⚠️ Ошибка при посещении {site}: {e}")
+                        self._print_substep(f"[{i}/{len(warmup_sites)}] {site} - {e}", "⚠️")
                 
                 try:
                     await warmup_page.close()
@@ -868,9 +1057,13 @@ class AutonomousRegistration:
                     
                 await asyncio.sleep(random.uniform(1, 3))
             except Exception as e:
-                print(f"   ⚠️ Ошибка при прогреве браузера: {e}")
+                self._print_substep(f"Ошибка прогрева: {e}", "⚠️")
             
-            # 5. Получаем случайные данные (через шаг)
+            # ═══════════════════════════════════════════════════════════════
+            # ЭТАП 5: Получение данных
+            # ═══════════════════════════════════════════════════════════════
+            self._print_stage(5, total_stages, "ПОЛУЧЕНИЕ ДАННЫХ", "📋")
+            self._print_substep("Запрос случайных имени и пароля...")
             random_data = await self.step_get_random_data.run(
                 self.get_random_data,
                 context={"iteration": iteration},
@@ -878,28 +1071,36 @@ class AutonomousRegistration:
                 screenshots_dir=Path("debug_screenshots"),
             )
             if not random_data:
-                print("❌ Не удалось получить случайные данные")
+                self._print_substep("Не удалось получить данные", "❌")
                 self.failed_registrations += 1
                 return False
             
             full_name, password = random_data
+            self._print_substep(f"Имя: {full_name}", "✅")
+            self._print_substep(f"Пароль: {password}", "✅")
             
-            # 6. Проверяем что контекст активен
             if not self.context:
-                print("❌ Контекст браузера закрыт")
+                self._print_substep("Контекст браузера закрыт", "❌")
                 self.failed_registrations += 1
                 return False
             
-            # 7. Создаем две страницы: для temp-mail и для Airtable
+            self._print_substep("Создание страниц браузера...")
             try:
                 mail_page = await self.context.new_page()
                 airtable_page = await self.context.new_page()
+                self._print_substep("Страницы созданы", "✅")
             except Exception as e:
-                print(f"❌ Не удалось создать страницы: {e}")
+                self._print_substep(f"Ошибка создания страниц: {e}", "❌")
                 self.failed_registrations += 1
                 return False
             
-            # 5. Получаем временную почту (через шаг)
+            # ═══════════════════════════════════════════════════════════════
+            # ЭТАП 6: Получение временной почты
+            # ═══════════════════════════════════════════════════════════════
+            self._print_stage(6, total_stages, f"ПОЛУЧЕНИЕ TEMP EMAIL ({self.email_provider.name})", "📧")
+            self._print_substep(f"Провайдер: {self.email_provider.name}")
+            self._print_substep(f"URL: {self.email_provider.url}")
+            
             email = await self.step_get_temp_email.run(
                 lambda: self.get_temp_email(mail_page),
                 context={"iteration": iteration},
@@ -907,11 +1108,20 @@ class AutonomousRegistration:
                 screenshots_dir=Path("debug_screenshots"),
             )
             if not email:
-                print("❌ Не удалось получить временную почту")
+                self._print_substep("Не удалось получить email", "❌")
                 self.failed_registrations += 1
                 return False
             
-            # 6. Регистрируемся на Airtable
+            self._print_substep(f"Получен: {email}", "✅")
+            
+            # ═══════════════════════════════════════════════════════════════
+            # ЭТАП 7: Регистрация на Airtable
+            # ═══════════════════════════════════════════════════════════════
+            self._print_stage(7, total_stages, "РЕГИСТРАЦИЯ НА AIRTABLE", "🎯")
+            self._print_substep(f"Email: {email}")
+            self._print_substep(f"Имя: {full_name}")
+            self._print_substep(f"Реферал: {self.active_referral_name}")
+            
             success = await self.register_step(
                 airtable_page,
                 email,
@@ -920,18 +1130,37 @@ class AutonomousRegistration:
                 context={"iteration": iteration, "email": email},
             )
             if not success:
-                print("❌ Регистрация не удалась")
+                self._print_substep("Регистрация не удалась", "❌")
                 self.failed_registrations += 1
                 return False
             
-            # 7. Подтверждаем email
+            self._print_substep("Форма регистрации отправлена", "✅")
+            
+            # ═══════════════════════════════════════════════════════════════
+            # ЭТАП 8: Подтверждение Email
+            # ═══════════════════════════════════════════════════════════════
+            self._print_stage(8, 8, "ПОДТВЕРЖДЕНИЕ EMAIL", "📬")
+            self._print_substep(f"Ожидание письма от Airtable...")
+            self._print_substep(f"Макс. ожидание: {self.max_wait_for_email} сек")
+            
             confirmed = await self.confirm_email_step(
                 mail_page,
                 airtable_page,
                 context={"iteration": iteration, "email": email},
             )
             
-            # 8. Сохраняем результат
+            if confirmed:
+                self._print_substep("Email подтверждён", "✅")
+            else:
+                self._print_substep("Email не подтверждён", "⚠️")
+            
+            # ═══════════════════════════════════════════════════════════════
+            # ИТОГ: Сохранение результата
+            # ═══════════════════════════════════════════════════════════════
+            print("\n" + "─" * 60)
+            print("💾 СОХРАНЕНИЕ РЕЗУЛЬТАТА")
+            print("─" * 60)
+            
             result = {
                 "iteration": iteration,
                 "timestamp": datetime.now().isoformat(),
@@ -949,13 +1178,19 @@ class AutonomousRegistration:
             
             self.save_result(result)
             
-            if success:
+            # ═══════════════════════════════════════════════════════════════
+            # ФИНАЛ ЦИКЛА
+            # ═══════════════════════════════════════════════════════════════
+            if success and confirmed:
                 self.successful_registrations += 1
-                print("\n🎉 РЕГИСТРАЦИЯ УСПЕШНА!")
+                printer.success_banner(email, password)
+            elif success:
+                self.successful_registrations += 1
+                printer.partial_success_banner(email, password)
             else:
                 self.failed_registrations += 1
+                printer.failure_banner("Регистрация не завершена")
             
-            # Даем время посмотреть результат
             print("\n⏸️  Пауза 10 секунд перед следующей итерацией...")
             await asyncio.sleep(10)
             
@@ -1008,28 +1243,20 @@ class AutonomousRegistration:
         print(f"💾 Результат сохранен: {txt_file.name}")
     
     def print_statistics(self):
-        """Вывод статистики"""
-        print("\n" + "="*70)
-        print("📊 СТАТИСТИКА")
-        print("="*70)
-        print(f"Всего попыток: {self.total_attempts}")
-        print(f"Успешных: {self.successful_registrations} ✅")
-        print(f"Неудачных: {self.failed_registrations} ❌")
-        if self.total_attempts > 0:
-            success_rate = (self.successful_registrations / self.total_attempts) * 100
-            print(f"Процент успеха: {success_rate:.1f}%")
-        print("="*70)
+        """Вывод статистики с цветами"""
+        printer.statistics(self.total_attempts, self.successful_registrations, self.failed_registrations)
     
     async def run_infinite_loop(self):
         """Бесконечный цикл регистраций"""
-        print("\n" + "🔄" * 35)
-        print("🤖 ЗАПУСК АВТОНОМНОЙ СИСТЕМЫ МАССОВОЙ РЕГИСТРАЦИИ")
-        print("🔄" * 35)
-        print(f"📍 Реферальная ссылка: {self.referral_url}")
-        print(f"🏷️  Активный реферал: {self.active_referral_name}")
-        print(f"⏱️  Задержка между циклами: {self.delay_between_cycles} секунд")
-        print(f"📂 Результаты сохраняются в: {self.results_dir.absolute()}")
-        print("\n⚠️  Нажмите Ctrl+C для остановки\n")
+        c = Colors
+        print(f"\n{c.BG_MAGENTA}{c.WHITE}{c.BOLD}{'🔄' * 35}{c.RESET}")
+        print(f"{c.BG_MAGENTA}{c.WHITE}{c.BOLD}{'':^20}🤖 ЗАПУСК АВТОНОМНОЙ СИСТЕМЫ МАССОВОЙ РЕГИСТРАЦИИ 🤖{'':^9}{c.RESET}")
+        print(f"{c.BG_MAGENTA}{c.WHITE}{c.BOLD}{'🔄' * 35}{c.RESET}")
+        print(f"{c.CYAN}📍 Реферальная ссылка: {c.WHITE}{self.referral_url}{c.RESET}")
+        print(f"{c.CYAN}🏷️  Активный реферал: {c.WHITE}{self.active_referral_name}{c.RESET}")
+        print(f"{c.CYAN}⏱️  Задержка между циклами: {c.WHITE}{self.delay_between_cycles} секунд{c.RESET}")
+        print(f"{c.CYAN}📂 Результаты сохраняются в: {c.WHITE}{self.results_dir.absolute()}{c.RESET}")
+        print(f"\n{c.YELLOW}⚠️  Нажмите Ctrl+C для остановки{c.RESET}\n")
         
         iteration = 1
         

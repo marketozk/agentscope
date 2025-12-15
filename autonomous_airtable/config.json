@@ -15,7 +15,7 @@
     "guerrillamail": {
       "name": "Guerrilla Mail",
       "url": "https://www.guerrillamail.com/",
-      "enabled": true,
+      "enabled": false,
       "description": "Надежный сервис без ограничений"
     },
     "10minutemail": {
@@ -37,7 +37,7 @@
       "description": "Хороший сервис с API"
     }
   },
-  "active_email_provider": "10minutemail",
+  "active_email_provider": "temp-mail",
   
   
   "settings": {
