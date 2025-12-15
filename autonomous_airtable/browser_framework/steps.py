@@ -32,12 +32,22 @@ class BrowserStep:
 
         last_exc: Optional[Exception] = None
 
+        # Исключения, которые не нужно ретраить (перманентные ошибки)
+        NO_RETRY_EXCEPTIONS = ("EmailDomainRejected",)
+
         for attempt in range(1, self.max_retries + 1):
             try:
                 result = await coro_factory()
                 print(f"✅ Шаг успешно завершён: {self.name} (попытка {attempt})")
                 return result
             except Exception as e:  # noqa: BLE001
+                # Если это перманентная ошибка — не ретраим, сразу пробрасываем
+                if type(e).__name__ in NO_RETRY_EXCEPTIONS:
+                    print(f"⛔ Перманентная ошибка (без ретрая): {self.name}")
+                    print(f"   Тип: {type(e).__name__}")
+                    print(f"   Сообщение: {e}")
+                    raise
+
                 last_exc = e
                 print(f"❌ Шаг упал: {self.name} (попытка {attempt}/{self.max_retries})")
                 print(f"   Тип: {type(e).__name__}")
