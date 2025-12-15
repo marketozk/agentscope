@@ -27,6 +27,16 @@ from browser_framework.steps import BrowserStep, BrowserStepError
 from email_providers import get_provider, get_enabled_providers, PROVIDERS
 from ui_signal_detector import UISignalDetector, SignalType, UISignal
 
+# Vision LLM для онбординга
+try:
+    from vision_onboarding_agent import VisionOnboardingAgent, OnboardingResult, try_complete_onboarding
+    from local_llm_analyzer import LocalLLMAnalyzer, get_analyzer
+    HAS_VISION_LLM = True
+except ImportError:
+    HAS_VISION_LLM = False
+    VisionOnboardingAgent = None
+    LocalLLMAnalyzer = None
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 🎨 ЦВЕТНОЙ ВЫВОД В КОНСОЛЬ
@@ -1039,6 +1049,35 @@ class AutonomousRegistration:
     async def complete_onboarding_steps(self, page: Page, max_steps: int = 10):
         """Универсальное прохождение шагов онбординга после регистрации"""
         print("\n🚶 Прохождение шагов онбординга...")
+        
+        # === ПОПЫТКА ИСПОЛЬЗОВАТЬ VISION LLM ===
+        if HAS_VISION_LLM:
+            try:
+                analyzer = get_analyzer()
+                if analyzer.is_available():
+                    print("\n🤖 Обнаружен LM Studio с Vision LLM - используем VisionOnboardingAgent")
+                    vision_agent = VisionOnboardingAgent(
+                        max_steps=max_steps * 2,  # Больше шагов для LLM
+                        timeout_seconds=300.0,
+                        workspace_name="My Workspace",
+                        user_name=f"{self.first_name} {self.last_name}" if hasattr(self, 'first_name') else "John Doe",
+                    )
+                    result = await vision_agent.complete_onboarding(page)
+                    
+                    if result == OnboardingResult.SUCCESS:
+                        print("\n✅ Vision LLM успешно завершил онбординг!")
+                        return True
+                    elif result == OnboardingResult.LLM_UNAVAILABLE:
+                        print("\n⚠️ LM Studio недоступен, используем fallback...")
+                    else:
+                        print(f"\n⚠️ Vision LLM результат: {result.value}, пробуем fallback...")
+                else:
+                    print("\n⚠️ LM Studio не запущен, используем fallback онбординг...")
+            except Exception as e:
+                print(f"\n⚠️ Ошибка Vision LLM: {e}, используем fallback...")
+        
+        # === FALLBACK: Стандартный онбординг ===
+        print("\n🔄 Fallback: стандартный алгоритм онбординга")
         
         last_url = None
         stuck_count = 0
